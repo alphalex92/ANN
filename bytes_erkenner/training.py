@@ -47,13 +47,15 @@ def fuer_auswertung(sekunden, seed):
     """
     start = time.perf_counter()
     rng = np.random.default_rng(seed)
-    X, y = erzeugen(30000, rng)
-    X = als_bits(X)
-    netz = Netz(X.shape[1], 64, len(KLASSEN), rng)
+    netz = Netz(64, 64, len(KLASSEN), rng)
 
     # Lernraten-Plan über die Zeit: lr fällt linear von 0.2 auf 0, wenn 90 % des Budgets um sind.
     ende = start + sekunden * 0.9
     while (rest := (ende - time.perf_counter()) / (ende - start)) > 0:
+        # Daten sind billig (0,02 s für 210 000 Beispiele): jede Epoche frische Beispiele,
+        # dann kann das Netz nichts auswendig lernen.
+        X, y = erzeugen(30000, rng)
+        X = als_bits(X)
         reihenfolge = rng.permutation(len(y))
         for anfang in range(0, len(reihenfolge), 64):
             idx = reihenfolge[anfang : anfang + 64]
