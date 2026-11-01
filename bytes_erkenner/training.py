@@ -51,14 +51,18 @@ def fuer_auswertung(sekunden, seed):
     X = als_bits(X)
     netz = Netz(X.shape[1], 64, len(KLASSEN), rng)
 
-    for _ in range(20):
+    # Lernraten-Plan über die Zeit: lr fällt linear von 0.2 auf 0, wenn 90 % des Budgets um sind.
+    ende = start + sekunden * 0.9
+    while (rest := (ende - time.perf_counter()) / (ende - start)) > 0:
         reihenfolge = rng.permutation(len(y))
         for anfang in range(0, len(reihenfolge), 64):
             idx = reihenfolge[anfang : anfang + 64]
             _, gradienten = netz.verlust_und_gradienten(X[idx], y[idx])
-            netz.schritt(gradienten, 0.2)
-        if time.perf_counter() - start > sekunden * 0.9:
-            break
+            netz.schritt(gradienten, 0.2 * max(rest, 0))
+            if anfang % 6400 == 0:  # die Uhr nicht bei jedem Schritt fragen
+                rest = (ende - time.perf_counter()) / (ende - start)
+                if rest <= 0:
+                    break
 
     return lambda bytes_: netz.vorwaerts(als_bits(bytes_)).argmax(axis=1)
 
