@@ -1,0 +1,6 @@
+# Für das Sprachmodell (Projekt 2). PyTorch mit CUDA 12.8, nötig für RTX-50er-Karten (Blackwell).
+--extra-index-url https://download.pytorch.org/whl/cu128
+torch>=2.7
+numpy>=1.24
+pyarrow
+pytest
