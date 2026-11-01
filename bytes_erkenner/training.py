@@ -47,7 +47,7 @@ def fuer_auswertung(sekunden, seed):
     """
     start = time.perf_counter()
     rng = np.random.default_rng(seed)
-    X, y = erzeugen(3000, rng)
+    X, y = erzeugen(30000, rng)
     X = als_bits(X)
     netz = Netz(X.shape[1], 64, len(KLASSEN), rng)
 
