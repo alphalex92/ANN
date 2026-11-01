@@ -1,5 +1,7 @@
 """Trainingsschleife und Auswertung."""
 
+import time
+
 import numpy as np
 
 from .daten import KLASSEN, als_bits, erzeugen
@@ -35,6 +37,30 @@ def trainieren(epochen=20, versteckt=64, lernrate=0.2, batch=64, n_pro_klasse=30
         )
 
     return netz, X_test, y_test
+
+
+def fuer_auswertung(sekunden, seed):
+    """Vertrag mit forschung/auswertung.py – hier setzt die Forschungsschleife an.
+
+    Höchstens `sekunden` lang trainieren (Daten erzeugen zählt mit) und eine Funktion
+    zurückgeben, die für Bytes der Form (N, 8) die Klassen-Indizes (N,) rät.
+    """
+    start = time.perf_counter()
+    rng = np.random.default_rng(seed)
+    X, y = erzeugen(3000, rng)
+    X = als_bits(X)
+    netz = Netz(X.shape[1], 64, len(KLASSEN), rng)
+
+    for _ in range(20):
+        reihenfolge = rng.permutation(len(y))
+        for anfang in range(0, len(reihenfolge), 64):
+            idx = reihenfolge[anfang : anfang + 64]
+            _, gradienten = netz.verlust_und_gradienten(X[idx], y[idx])
+            netz.schritt(gradienten, 0.2)
+        if time.perf_counter() - start > sekunden * 0.9:
+            break
+
+    return lambda bytes_: netz.vorwaerts(als_bits(bytes_)).argmax(axis=1)
 
 
 def verwechslungsmatrix(netz, X, y):
