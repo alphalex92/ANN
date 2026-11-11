@@ -174,3 +174,78 @@ Englisch nach, prüft sein Ergebnis noch einmal und antwortet auf Deutsch.
 Das Modell bringt eigenen Code mit (`trust_remote_code=True`). Er importiert nur torch,
 transformers und math. Beim Laden erscheinen Warnungen zu `cache_position`. Sie betreffen den
 Code von IFM und sind harmlos.
+
+### Stufe 1: Wissen oder nachschlagen?
+
+Das erste Training soll dem Modell ein **Verhalten** beibringen, keine Fakten: Was es sicher
+weiß, beantwortet es direkt. Was es nicht weiß, sucht es nach, statt zu raten.
+
+**Schritt 1, Wissensprüfung** ([wissen.py](k2_horizon/wissen.py)): Fragen aus
+[PopQA](https://huggingface.co/datasets/akariasai/PopQA) mit bekannten Lösungen. Jede Frage
+wird 5-mal ohne Suche gestellt. Bei mindestens 4 Treffern gilt sie als `gewusst`, bei
+höchstens 1 als `unbekannt`, sonst als `unklar`.
+
+```bash
+curl -L -o /mnt/nvme2/daten/popqa/test.tsv https://huggingface.co/datasets/akariasai/PopQA/resolve/main/test.tsv
+```
+
+```bash
+python -m k2_horizon wissen --anzahl 20000
+```
+
+```bash
+python -m k2_horizon wissen --nur-zusammenfassung
+```
+
+Weggelassen sind Fragetypen, bei denen Raten oft trifft. Bei `sport` lautet z. B. 60 % der
+Antworten „association football“, bei `religion` 40 % „Catholic Church“. Geprüft wird mit
+`--aufwand low`: Das ist 35-mal schneller als `medium` (etwa 3 Fragen/s mit 5 Versuchen), und
+beim reinen Faktenabruf hilft Nachdenken kaum.
+
+Was der Probelauf mit 96 Fragen zeigt: Das Modell weiß nur 7 % der Antworten sicher. Bei
+unbekannten Fakten **erfindet es meist bei jedem Versuch etwas anderes**. Bei einer
+unbekannten Person kamen nacheinander Belém, Bujumbura, Masaka, Mweru und Yaoundé als
+Geburtsort.
+
+**Schritt 2, lokale Wikipedia-Suche** ([suche.py](k2_horizon/suche.py)): Die Grundlage ist
+der englische Wikipedia-Abzug [wikimedia/wikipedia](https://huggingface.co/datasets/wikimedia/wikipedia)
+`20231101.en` (11,6 GB, 6,4 Mio. Artikel, CC-BY-SA). Einzeln abrufen lassen sich die Seiten
+nicht: Wikipedia bremst schon nach wenigen Abrufen pro Sekunde.
+
+```bash
+hf download wikimedia/wikipedia --repo-type dataset --include "20231101.en/*" --local-dir /mnt/nvme2/daten/wikipedia
+```
+
+```bash
+python -c "from k2_horizon.suche import bauen; bauen('/mnt/nvme2/daten/wikipedia/20231101.en', '/mnt/nvme2/daten/k2/wiki_index')"
+```
+
+```bash
+python -m k2_horizon suche "Who was the director of Total Recall?"
+```
+
+```bash
+python -m k2_horizon suche-messen --teil test
+```
+
+Der Index ist in 7 Minuten gebaut und belegt 21 GB, davon 19,6 GB für die Artikeltexte. BM25
+ist von Hand in numpy geschrieben, die Formel steht oben in `suche.py`. Die Suche arbeitet in
+zwei Stufen. **Stufe 1** findet 20 Artikel über Titel und die ersten 600 Zeichen. Ein Index über
+alle Volltexte würde die 32 GB RAM sprengen. **Stufe 2** zerlegt diese Artikel in Abschnitte von
+etwa 120 Wörtern und gibt die 5 besten zurück. Eine Suche dauert etwa eine halbe Sekunde.
+
+Gemessen wird mit der PopQA-Frage als Anfrage, ob eine erlaubte Lösung in den Treffern steht:
+
+| Stand | Artikel gefunden | Antwort in Treffern |
+|---|---|---|
+| reines BM25, 3 Treffer | 42 % | 34 % |
+| + Titel aus der Frage bevorzugen, Verbformen ergänzen | 82 % | 43 % |
+| + Titelbonus auch in Stufe 2, Artikelanfang bevorzugt | 82 % | 61 % |
+| + 5 statt 3 Treffer, Fragewörter nicht als Titel | 83 % | **73 %** (Test: 71 %) |
+| *Obergrenze: Antwort steht überhaupt im Artikel* | | *87 %* |
+
+Was hat am meisten gebracht? Bei „Who was the director of Victory?“ heißt der Artikel
+„Victory (1938 film)“, und „victory“ steht in Tausenden Artikeln. Artikel, deren Titel ohne
+Klammerzusatz wörtlich in der Frage steht, bekommen deshalb einen Bonus. Viele der übrigen
+Fehler sind echt mehrdeutig. Bei „Who was the screenwriter for Paradise?“ ist nicht
+erkennbar, welcher Film gemeint ist. Hier muss das Modell später seine Anfrage verfeinern.

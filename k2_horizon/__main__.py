@@ -1,4 +1,4 @@
-"""Kommandozeile: python -m k2_horizon {fragen,tempo,lora-speicher}"""
+"""Kommandozeile: python -m k2_horizon {fragen,tempo,lora-speicher,wissen,suche,suche-messen}"""
 import argparse
 import os
 import time
@@ -23,7 +23,51 @@ def main():
     l = unter.add_parser("lora-speicher", help="VRAM und Durchsatz beim LoRA-Training messen")
     l.add_argument("--rang", type=int, default=16)
 
+    w = unter.add_parser("wissen", help="prüfen, welche Faktenfragen das Modell ohne Suche weiß")
+    w.add_argument("--fragen", default="/mnt/nvme2/daten/popqa/test.tsv", help="PopQA-TSV")
+    w.add_argument("--ziel", default="/mnt/nvme2/daten/k2/wissen.jsonl")
+    w.add_argument("--anzahl", type=int, default=3000)
+    w.add_argument("--versuche", type=int, default=5)
+    w.add_argument("--aufwand", default="low", choices=["low", "medium", "high"])
+    w.add_argument("--stapel", type=int, default=16, help="Fragen pro Durchlauf")
+    w.add_argument("--max-neu", type=int, default=96)
+    w.add_argument("--seed", type=int, default=0)
+    w.add_argument("--nur-zusammenfassung", action="store_true")
+
+    s = unter.add_parser("suche", help="die lokale Wikipedia-Suche ausprobieren")
+    s.add_argument("anfrage")
+    s.add_argument("--index", default="/mnt/nvme2/daten/k2/wiki_index")
+
+    m = unter.add_parser("suche-messen", help="wie oft steckt die Antwort in den Suchtreffern?")
+    m.add_argument("--index", default="/mnt/nvme2/daten/k2/wiki_index")
+    m.add_argument("--wissen", default="/mnt/nvme2/daten/k2/wissen.jsonl")
+    m.add_argument("--anzahl", type=int, default=500)
+    m.add_argument("--teil", default="val")
+
     a = p.parse_args()
+
+    if a.befehl == "suche":
+        from .suche import Suche, als_text
+        start = time.perf_counter()
+        index = Suche(a.index)
+        print(f"(Index geladen in {time.perf_counter() - start:.0f} s)\n")
+        print(als_text(index.suchen(a.anfrage)))
+        return
+
+    if a.befehl == "suche-messen":
+        from .wissen import suche_messen
+        suche_messen(a.index, a.wissen, a.anzahl, a.teil)
+        return
+
+    if a.befehl == "wissen" and a.nur_zusammenfassung:
+        from .wissen import zusammenfassen
+        n, gesamt, je_typ = zusammenfassen(a.ziel)
+        print(f"{n} Fragen: " + ", ".join(f"{k} {v} ({v / n:.0%})" for k, v in gesamt.most_common()))
+        for typ, c in sorted(je_typ.items(), key=lambda x: -sum(x[1].values())):
+            s = sum(c.values())
+            print(f"  {typ:15s} {s:5d}  gewusst {c['gewusst'] / s:4.0%}  unklar {c['unklar'] / s:4.0%}"
+                  f"  unbekannt {c['unbekannt'] / s:4.0%}")
+        return
 
     import torch
     from .modell import fragen, laden
@@ -49,6 +93,14 @@ def main():
         torch.cuda.synchronize()
         dauer = time.perf_counter() - start
         print(f"{a.tokens} Tokens in {dauer:.1f} s = {a.tokens / dauer:.1f} Tokens/s")
+
+    elif a.befehl == "wissen":
+        from .bewertung import fragen_laden, stichprobe
+        from .wissen import pruefen
+
+        os.makedirs(os.path.dirname(a.ziel), exist_ok=True)
+        auswahl = stichprobe(fragen_laden(a.fragen), a.anzahl, a.seed)
+        pruefen(tok, model, auswahl, a.ziel, a.versuche, a.aufwand, a.stapel, a.max_neu)
 
     elif a.befehl == "lora-speicher":
         from .lora import lora_vorbereiten, speicher_messen

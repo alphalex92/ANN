@@ -6,4 +6,6 @@ transformers==5.15.0
 peft>=0.21
 accelerate>=1.15
 safetensors>=0.8
+pyarrow>=26
+PyStemmer>=3.1
 pytest
