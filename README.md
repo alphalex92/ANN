@@ -102,3 +102,75 @@ Nach 20 Epochen liegt das Netz bei etwa **92 %** auf den Testdaten (in ~3 Sekund
 - Statt 64 Bits die 8 Bytes als Zahlen 0–1 eingeben: Lernt das Netz dann besser oder schlechter?
 - Echte Bytes aus einem Spiel mit dem [Trainer](https://github.com/alphalex92/Trainer) auslesen
   und raten lassen.
+
+## Reasoning-Kern: K2 Horizon 3.7B
+
+Die Idee: ein kleines Modell, das vor allem gut **denkt**, statt alles auswendig zu wissen.
+Fakten soll es sich später durch Recherche holen und mit der Zeit dazulernen. Als Ausgangspunkt
+dient [K2 Horizon 3.7B](https://huggingface.co/IFM/K2-Horizon-3.7B) von MBZUAI (Apache 2.0).
+Dort sind auch Trainingsdaten, Code und Zwischenstände veröffentlicht. So lässt sich prüfen, ob
+das Modell einen Fakt recherchiert oder schon gekannt hat.
+
+### Einrichten
+
+Das Modell (9,5 GB) liegt außerhalb des Repos. Den Pfad kann man mit `K2_PFAD` ändern,
+Standard ist `/mnt/nvme2/modelle/K2-Horizon-3.7B`.
+
+```bash
+hf download IFM/K2-Horizon-3.7B --local-dir /mnt/nvme2/modelle/K2-Horizon-3.7B
+```
+
+```bash
+uv pip install torch --index-url https://download.pytorch.org/whl/cu128
+```
+
+```bash
+uv pip install -r requirements-k2.txt
+```
+
+### Benutzen
+
+```bash
+python -m k2_horizon fragen "Wie viele Primzahlen liegen zwischen 1 und 50?" --gedanken
+```
+
+```bash
+python -m k2_horizon tempo
+```
+
+```bash
+python -m k2_horizon lora-speicher --rang 16
+```
+
+`--aufwand low|medium|high` stellt ein, wie lange das Modell nachdenkt. Bei `low` lässt es das
+Denken fast weg und verrechnet sich bei einfachen Textaufgaben. Bei `high` denkt es auf
+Englisch nach, prüft sein Ergebnis noch einmal und antwortet auf Deutsch.
+
+### Gemessen auf einer RTX 5080 (16 GB)
+
+- **Erzeugen:** etwa 70 Tokens/s, 9,4 GB VRAM in bf16. Der erste Aufruf nach dem Laden ist
+  deutlich langsamer.
+- **LoRA-Training** (bf16, Rang 16, 34 Mio. trainierbare Parameter, Batch 1):
+
+| Sequenzlänge | Spitze VRAM | Tokens/s |
+|---|---|---|
+| 1024 | 11,4 GB | 2 184 |
+| 2048 | 11,6 GB | 1 974 |
+| 4096 | 12,0 GB | 1 785 |
+| 8192 | 13,4 GB | 1 578 |
+| 16384 | reicht nicht | |
+
+### Zwei Stolperfallen
+
+1. **`model.train()` nicht vergessen.** Nach dem Laden steht das Modell im Auswertungsmodus, und
+   dann wirkt Gradient Checkpointing nicht. Schon bei 512 Tokens ist der Speicher voll.
+2. **Der Wortschatz ist riesig.** Er umfasst 250 624 Tokens. Für jede Position entsteht ein
+   Logit-Vektor dieser Länge, und der normale Verlust von Transformers legt davon Kopien in
+   float32 an. Damit war bei 1024 Tokens Schluss. [verlust.py](k2_horizon/verlust.py) rechnet
+   den Verlust deshalb blockweise mit Checkpointing. Der Test
+   [test_k2_verlust.py](tests/test_k2_verlust.py) prüft, dass Wert und Gradienten exakt dem
+   normalen Verlust entsprechen.
+
+Das Modell bringt eigenen Code mit (`trust_remote_code=True`). Er importiert nur torch,
+transformers und math. Beim Laden erscheinen Warnungen zu `cache_position`. Sie betreffen den
+Code von IFM und sind harmlos.

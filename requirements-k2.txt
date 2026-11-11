@@ -1,0 +1,9 @@
+# Für k2_horizon. Die RTX 5080 (Blackwell) braucht PyTorch mit CUDA 12.8 oder neuer:
+#   uv pip install torch --index-url https://download.pytorch.org/whl/cu128
+#   uv pip install -r requirements-k2.txt
+torch>=2.11
+transformers==5.15.0
+peft>=0.21
+accelerate>=1.15
+safetensors>=0.8
+pytest
