@@ -279,8 +279,19 @@ class Suche:
         return [kandidaten[i] for i in beste if punkte[i] > 0]
 
 
-def als_text(treffer, max_zeichen=700):
-    """Formatiert Suchtreffer so, wie das Modell sie als Werkzeug-Ergebnis sieht."""
+def kuerzen(text, max_zeichen):
+    """Kürzt an einer Wortgrenze und zeigt mit '…', dass etwas fehlt."""
+    if len(text) <= max_zeichen:
+        return text
+    return text[:max_zeichen].rsplit(" ", 1)[0] + " …"
+
+
+def als_text(treffer, max_zeichen=1500):
+    """Formatiert Suchtreffer so, wie das Modell sie als Werkzeug-Ergebnis sieht.
+
+    Die meisten Abschnitte sind kürzer als 1500 Zeichen und kommen vollständig an. Bei 700
+    Zeichen fehlte oft genau der Satz mit der Antwort, und das Modell suchte erneut.
+    """
     if not treffer:
         return "No results."
-    return "\n\n".join(f"[{i + 1}] {t}\n{x[:max_zeichen]}" for i, (t, x) in enumerate(treffer))
+    return "\n\n".join(f"[{i + 1}] {t}\n{kuerzen(x, max_zeichen)}" for i, (t, x) in enumerate(treffer))

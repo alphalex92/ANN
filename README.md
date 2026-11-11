@@ -249,3 +249,25 @@ Was hat am meisten gebracht? Bei „Who was the director of Victory?“ heißt d
 Klammerzusatz wörtlich in der Frage steht, bekommen deshalb einen Bonus. Viele der übrigen
 Fehler sind echt mehrdeutig. Bei „Who was the screenwriter for Paradise?“ ist nicht
 erkennbar, welcher Film gemeint ist. Hier muss das Modell später seine Anfrage verfeinern.
+
+#### Schritt 3: Lösungswege erzeugen und auswählen
+
+```bash
+python -m k2_horizon laeufe
+```
+
+Das Modell beantwortet alle gewussten und 1.600 zufällige unbekannte Trainingsfragen mit Zugriff
+auf die Suche (`agent.py`). Beim Erzeugen steht im Systemprompt ein Hinweis: „Wenn du dir nicht
+sicher bist, such nach, sonst antworte direkt.“ In den gespeicherten Gesprächen fehlt er. Das
+Modell soll das Verhalten später ohne Aufforderung zeigen. `datensatz.py` behält nur richtiges
+Verhalten: gewusste Fragen ohne Suche richtig beantwortet, unbekannte mit mindestens einer Suche
+richtig beantwortet. Mittlerer Denkaufwand, höchstens 3 Suchen, etwa 2,5 Stunden.
+
+| | behalten | Hauptgrund für Verwerfen |
+|---|---|---|
+| gewusst | 285 / 424 (67 %) | 111× unnötig gesucht |
+| unbekannt | 614 / 1.609 (38 %) | 645× nach 3 Suchen keine Antwort |
+
+Bei 390 dieser 645 Abbrüche stand die Antwort schon in den Treffern. Das Modell übersieht sie
+oder traut ihnen nicht. Unter den gewussten Beispielen sind 220 von 285 Hauptstädte, deshalb
+wird nach Fragetyp getrennt ausgewertet.

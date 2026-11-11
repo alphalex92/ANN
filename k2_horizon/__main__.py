@@ -1,4 +1,4 @@
-"""Kommandozeile: python -m k2_horizon {fragen,tempo,lora-speicher,wissen,suche,suche-messen}"""
+"""Kommandozeile: python -m k2_horizon {fragen,tempo,lora-speicher,wissen,suche,suche-messen,laeufe}"""
 import argparse
 import os
 import time
@@ -43,6 +43,17 @@ def main():
     m.add_argument("--wissen", default="/mnt/nvme2/daten/k2/wissen.jsonl")
     m.add_argument("--anzahl", type=int, default=500)
     m.add_argument("--teil", default="val")
+
+    e = unter.add_parser("laeufe", help="Lösungswege mit Suche erzeugen")
+    e.add_argument("--wissen", default="/mnt/nvme2/daten/k2/wissen.jsonl")
+    e.add_argument("--index", default="/mnt/nvme2/daten/k2/wiki_index")
+    e.add_argument("--ziel", default="/mnt/nvme2/daten/k2/laeufe.jsonl")
+    e.add_argument("--teil", default="train")
+    e.add_argument("--unbekannt", type=int, default=1600, help="so viele unbekannte Fragen, alle gewussten")
+    e.add_argument("--aufwand", default="medium", choices=["low", "medium", "high"])
+    e.add_argument("--ohne-hinweis", action="store_true")
+    e.add_argument("--stapel", type=int, default=16)
+    e.add_argument("--seed", type=int, default=0)
 
     a = p.parse_args()
 
@@ -101,6 +112,23 @@ def main():
         os.makedirs(os.path.dirname(a.ziel), exist_ok=True)
         auswahl = stichprobe(fragen_laden(a.fragen), a.anzahl, a.seed)
         pruefen(tok, model, auswahl, a.ziel, a.versuche, a.aufwand, a.stapel, a.max_neu)
+
+    elif a.befehl == "laeufe":
+        import json
+        import random
+
+        from .agent import Agent, laeufe_erzeugen
+        from .suche import Suche
+
+        with open(a.wissen, encoding="utf-8") as f:
+            zeilen = [json.loads(z) for z in f if z.strip()]
+        zeilen = [z for z in zeilen if z["teil"] == a.teil]
+        rng = random.Random(a.seed)
+        unbekannt = [z for z in zeilen if z["klasse"] == "unbekannt"]
+        auswahl = [z for z in zeilen if z["klasse"] == "gewusst"] + rng.sample(unbekannt, min(a.unbekannt, len(unbekannt)))
+        rng.shuffle(auswahl)
+        agent = Agent(tok, model, Suche(a.index), aufwand=a.aufwand)
+        laeufe_erzeugen(agent, auswahl, a.ziel, hinweis=not a.ohne_hinweis, stapel=a.stapel)
 
     elif a.befehl == "lora-speicher":
         from .lora import lora_vorbereiten, speicher_messen
