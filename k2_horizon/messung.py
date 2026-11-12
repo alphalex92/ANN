@@ -56,6 +56,8 @@ def auswerten(laeufe):
             zeilen.append(f"      {typ:16s} {m:4d}  gesucht {sum(l['suchen'] > 0 for l in ls) / m:4.0%}"
                           f"  richtig {sum(l['richtig'] for l in ls) / m:4.0%}")
     n = len(laeufe)
+    if not n:
+        return "Keine Läufe."
     zeilen.append(f"gesamt ({n}): richtig {sum(l['richtig'] for l in laeufe) / n:.0%}, "
                   f"Suchen je Frage {sum(l['suchen'] for l in laeufe) / n:.2f}")
     return "\n".join(zeilen)

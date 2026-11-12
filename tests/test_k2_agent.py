@@ -46,3 +46,17 @@ def test_auswahl_behaelt_nur_richtiges_verhalten():
     assert not gut(dict(basis, klasse="unbekannt", suchen=1, richtig=False))
     assert not gut(dict(basis, klasse="unbekannt", suchen=3, status="zu_viele_suchen"))
     assert not gut(dict(basis, klasse="unklar", suchen=0))
+
+
+def test_paare_gut_gegen_schlecht():
+    from k2_horizon.datensatz import paare
+    def lauf(i, klasse, suchen, richtig=True, status="fertig"):
+        return {"id": i, "klasse": klasse, "typ": "father", "suchen": suchen, "richtig": richtig, "status": status,
+                "gespraech": [{"role": "user", "content": "Q"}, {"role": "assistant", "think_fast": "", "content": str(suchen)}]}
+    laeufe = [lauf(7, "gewusst", 0), lauf("7#0", "gewusst", 1), lauf("7#1", "gewusst", 2),
+              lauf("8#0", "unbekannt", 0, richtig=False), lauf("8#1", "unbekannt", 1, status="abgeschnitten"),
+              lauf("9#0", "gewusst", 0)]
+    p = paare(laeufe)
+    assert len(p) == 1  # Frage 7: ein guter Lauf reicht nur für ein Paar; 8 hat keinen guten, 9 keinen schlechten
+    assert p[0]["id"] == "7" and p[0]["chosen"][0]["content"] == "0" and p[0]["grund"] == "unnötig gesucht"
+    assert p[0]["prompt"] == [{"role": "user", "content": "Q"}]

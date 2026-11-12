@@ -1,4 +1,4 @@
-"""Kommandozeile: python -m k2_horizon {fragen,tempo,lora-speicher,wissen,suche,suche-messen,laeufe,messen}"""
+"""Kommandozeile: python -m k2_horizon {fragen,tempo,lora-speicher,wissen,suche,suche-messen,laeufe,messen,trainieren,dpo}"""
 import argparse
 import os
 import time
@@ -54,6 +54,7 @@ def main():
     e.add_argument("--ohne-hinweis", action="store_true")
     e.add_argument("--stapel", type=int, default=16)
     e.add_argument("--seed", type=int, default=0)
+    e.add_argument("--wiederholungen", type=int, default=1, help="Läufe je Frage, z. B. für Vergleichspaare")
 
     v = unter.add_parser("messen", help="Wissen oder nachschlagen? Ohne Hinweis auf Validierungsfragen")
     v.add_argument("--wissen", default="/mnt/nvme2/daten/k2/wissen.jsonl")
@@ -65,6 +66,25 @@ def main():
     v.add_argument("--aufwand", default="medium", choices=["low", "medium", "high"])
     v.add_argument("--stapel", type=int, default=16)
     v.add_argument("--nur-auswertung", action="store_true")
+
+    r = unter.add_parser("trainieren", help="LoRA-Training auf den ausgewählten Lösungswegen")
+    r.add_argument("--daten", default="/mnt/nvme2/daten/k2/sft_train.jsonl")
+    r.add_argument("--ziel", default="/mnt/nvme2/daten/k2/lora_stufe1")
+    r.add_argument("--epochen", type=int, default=2)
+    r.add_argument("--sammeln", type=int, default=8, help="Gespräche je Optimierungsschritt")
+    r.add_argument("--lernrate", type=float, default=1e-4)
+    r.add_argument("--rang", type=int, default=16)
+    r.add_argument("--max-schritte", type=int, help="zum Ausprobieren früher aufhören")
+
+    d = unter.add_parser("dpo", help="Präferenztraining auf Vergleichspaaren")
+    d.add_argument("--daten", default="/mnt/nvme2/daten/k2/dpo_train.jsonl")
+    d.add_argument("--ziel", default="/mnt/nvme2/daten/k2/lora_dpo1")
+    d.add_argument("--epochen", type=int, default=2)
+    d.add_argument("--sammeln", type=int, default=8)
+    d.add_argument("--lernrate", type=float, default=5e-5)
+    d.add_argument("--beta", type=float, default=0.1)
+    d.add_argument("--alpha", type=float, default=1.0, help="Gewicht des SFT-Anteils auf dem guten Lauf")
+    d.add_argument("--max-schritte", type=int)
 
     a = p.parse_args()
 
@@ -143,6 +163,8 @@ def main():
         rng = random.Random(a.seed)
         unbekannt = [z for z in zeilen if z["klasse"] == "unbekannt"]
         auswahl = [z for z in zeilen if z["klasse"] == "gewusst"] + rng.sample(unbekannt, min(a.unbekannt, len(unbekannt)))
+        if a.wiederholungen > 1:  # jede Wiederholung bekommt eine eigene ID, damit Fortsetzen klappt
+            auswahl = [dict(z, id=f"{z['id']}#{k}") for z in auswahl for k in range(a.wiederholungen)]
         rng.shuffle(auswahl)
         agent = Agent(tok, model, Suche(a.index), aufwand=a.aufwand)
         laeufe_erzeugen(agent, auswahl, a.ziel, hinweis=not a.ohne_hinweis, stapel=a.stapel)
@@ -157,13 +179,24 @@ def main():
 
         if a.adapter:
             from peft import PeftModel
-            model = PeftModel.from_pretrained(model, a.adapter).eval()
-            print(f"Adapter geladen: {a.adapter}")
+            # Einrechnen statt daneben laufen lassen: Ein separater Adapter braucht beim Prompt
+            # eigene Zwischenergebnisse in voller Breite, das sprengt bei langen Prompts die 16 GB.
+            model = PeftModel.from_pretrained(model, a.adapter).merge_and_unload().eval()
+            print(f"Adapter eingerechnet: {a.adapter}")
         with open(a.wissen, encoding="utf-8") as f:
             fragen_ = auswahl([json.loads(z) for z in f if z.strip()], a.teil, a.unbekannt)
         agent = Agent(tok, model, Suche(a.index), aufwand=a.aufwand)
         laeufe_erzeugen(agent, fragen_, a.ziel, hinweis=False, stapel=a.stapel)
         print(auswerten(laeufe_laden(a.ziel)))
+
+    elif a.befehl == "trainieren":
+        from .training import trainieren
+        trainieren(tok, model, a.daten, a.ziel, a.epochen, a.sammeln, a.lernrate, a.rang, a.max_schritte)
+
+    elif a.befehl == "dpo":
+        from .dpo import trainieren as dpo_trainieren
+        dpo_trainieren(tok, model, a.daten, a.ziel, a.epochen, a.sammeln, a.lernrate, beta=a.beta,
+                       alpha=a.alpha, max_schritte=a.max_schritte)
 
     elif a.befehl == "lora-speicher":
         from .lora import lora_vorbereiten, speicher_messen
