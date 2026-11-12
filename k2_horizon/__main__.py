@@ -1,4 +1,4 @@
-"""Kommandozeile: python -m k2_horizon {fragen,tempo,lora-speicher,wissen,suche,suche-messen,laeufe}"""
+"""Kommandozeile: python -m k2_horizon {fragen,tempo,lora-speicher,wissen,suche,suche-messen,laeufe,messen}"""
 import argparse
 import os
 import time
@@ -55,7 +55,24 @@ def main():
     e.add_argument("--stapel", type=int, default=16)
     e.add_argument("--seed", type=int, default=0)
 
+    v = unter.add_parser("messen", help="Wissen oder nachschlagen? Ohne Hinweis auf Validierungsfragen")
+    v.add_argument("--wissen", default="/mnt/nvme2/daten/k2/wissen.jsonl")
+    v.add_argument("--index", default="/mnt/nvme2/daten/k2/wiki_index")
+    v.add_argument("--ziel", default="/mnt/nvme2/daten/k2/messung_basis.jsonl")
+    v.add_argument("--teil", default="val")
+    v.add_argument("--unbekannt", type=int, default=200, help="so viele unbekannte, alle gewussten und unklaren")
+    v.add_argument("--adapter", help="Ordner mit LoRA-Adapter, sonst das Grundmodell")
+    v.add_argument("--aufwand", default="medium", choices=["low", "medium", "high"])
+    v.add_argument("--stapel", type=int, default=16)
+    v.add_argument("--nur-auswertung", action="store_true")
+
     a = p.parse_args()
+
+    if a.befehl == "messen" and a.nur_auswertung:
+        from .datensatz import laden as laeufe_laden
+        from .messung import auswerten
+        print(auswerten(laeufe_laden(a.ziel)))
+        return
 
     if a.befehl == "suche":
         from .suche import Suche, als_text
@@ -129,6 +146,24 @@ def main():
         rng.shuffle(auswahl)
         agent = Agent(tok, model, Suche(a.index), aufwand=a.aufwand)
         laeufe_erzeugen(agent, auswahl, a.ziel, hinweis=not a.ohne_hinweis, stapel=a.stapel)
+
+    elif a.befehl == "messen":
+        import json
+
+        from .agent import Agent, laeufe_erzeugen
+        from .datensatz import laden as laeufe_laden
+        from .messung import auswahl, auswerten
+        from .suche import Suche
+
+        if a.adapter:
+            from peft import PeftModel
+            model = PeftModel.from_pretrained(model, a.adapter).eval()
+            print(f"Adapter geladen: {a.adapter}")
+        with open(a.wissen, encoding="utf-8") as f:
+            fragen_ = auswahl([json.loads(z) for z in f if z.strip()], a.teil, a.unbekannt)
+        agent = Agent(tok, model, Suche(a.index), aufwand=a.aufwand)
+        laeufe_erzeugen(agent, fragen_, a.ziel, hinweis=False, stapel=a.stapel)
+        print(auswerten(laeufe_laden(a.ziel)))
 
     elif a.befehl == "lora-speicher":
         from .lora import lora_vorbereiten, speicher_messen
