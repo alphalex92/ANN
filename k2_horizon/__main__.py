@@ -1,4 +1,4 @@
-"""Kommandozeile: python -m k2_horizon {fragen,tempo,lora-speicher,wissen,suche,suche-messen,laeufe,messen,trainieren,dpo}"""
+"""Kommandozeile: python -m k2_horizon {fragen,tempo,lora-speicher,wissen,suche,suche-messen,laeufe,messen,trainieren,dpo,raten,fortsetzen,lehrer,fortsetzungs-set}"""
 import argparse
 import os
 import time
@@ -86,6 +86,38 @@ def main():
     d.add_argument("--alpha", type=float, default=1.0, help="Gewicht des SFT-Anteils auf dem guten Lauf")
     d.add_argument("--max-schritte", type=int)
 
+    g = unter.add_parser("raten", help="Rate-Antworten ohne Suche zu unbekannten Fragen mit gutem Suchlauf")
+    g.add_argument("--wissen", default="/mnt/nvme2/daten/k2/wissen.jsonl")
+    g.add_argument("--laeufe", nargs="+", default=["/mnt/nvme2/daten/k2/laeufe.jsonl",
+                                                   "/mnt/nvme2/daten/k2/laeufe_paare.jsonl"])
+    g.add_argument("--ziel", default="/mnt/nvme2/daten/k2/laeufe_raten.jsonl")
+    g.add_argument("--aufwand", default="medium", choices=["low", "medium", "high"])
+    g.add_argument("--stapel", type=int, default=32)
+
+    n_ = unter.add_parser("fortsetzen", help="gescheiterte Suchläufe ab den Treffern mit der Antwort neu weiterschreiben")
+    n_.add_argument("--laeufe", nargs="+", default=["/mnt/nvme2/daten/k2/laeufe.jsonl",
+                                                    "/mnt/nvme2/daten/k2/laeufe_paare.jsonl"])
+    n_.add_argument("--index", default="/mnt/nvme2/daten/k2/wiki_index")
+    n_.add_argument("--ziel", default="/mnt/nvme2/daten/k2/laeufe_fortsetzen.jsonl")
+    n_.add_argument("--versuche", type=int, default=8)
+    n_.add_argument("--anzahl", type=int, help="nur so viele Stellen, zum Ausprobieren")
+    n_.add_argument("--aufwand", default="medium", choices=["low", "medium", "high"])
+    n_.add_argument("--stapel", type=int, default=16)
+
+    h = unter.add_parser("lehrer", help="Swift über die UkisAI-API setzt dieselben Stellen fort (ohne GPU)")
+    h.add_argument("--laeufe", nargs="+", default=["/mnt/nvme2/daten/k2/laeufe.jsonl",
+                                                   "/mnt/nvme2/daten/k2/laeufe_paare.jsonl"])
+    h.add_argument("--index", default="/mnt/nvme2/daten/k2/wiki_index")
+    h.add_argument("--ziel", default="/mnt/nvme2/daten/k2/laeufe_lehrer.jsonl")
+    h.add_argument("--modell", default="swift", choices=["swift", "flash-next"])
+    h.add_argument("--parallel", type=int, default=2)
+
+    b = unter.add_parser("fortsetzungs-set", help="SFT-Set aus fortgesetzten Stellen (K2 zuerst, sonst Lehrer)")
+    b.add_argument("--eigene", default="/mnt/nvme2/daten/k2/laeufe_fortsetzen.jsonl")
+    b.add_argument("--lehrer", default="/mnt/nvme2/daten/k2/laeufe_lehrer.jsonl")
+    b.add_argument("--ziel", default="/mnt/nvme2/daten/k2/sft_fortsetzen.jsonl")
+    b.add_argument("--je-stelle", type=int, default=1)
+
     a = p.parse_args()
 
     if a.befehl == "messen" and a.nur_auswertung:
@@ -100,6 +132,31 @@ def main():
         index = Suche(a.index)
         print(f"(Index geladen in {time.perf_counter() - start:.0f} s)\n")
         print(als_text(index.suchen(a.anfrage)))
+        return
+
+    if a.befehl == "lehrer":
+        from .datensatz import laden as laeufe_laden
+        from .datensatz import stellen
+        from .lehrer import Lehrer, laeufe_erzeugen
+        from .suche import Suche
+
+        auswahl = stellen([l for p_ in a.laeufe for l in laeufe_laden(p_) if l["teil"] == "train"])
+        laeufe_erzeugen(Lehrer(a.modell), auswahl, Suche(a.index), a.ziel, a.parallel)
+        return
+
+    if a.befehl == "fortsetzungs-set":
+        import json
+        from collections import Counter
+
+        from .datensatz import fortsetzungs_set
+        from .datensatz import laden as laeufe_laden
+
+        lehrer_ = laeufe_laden(a.lehrer) if os.path.exists(a.lehrer) else []
+        beispiele = fortsetzungs_set(laeufe_laden(a.eigene), lehrer_, a.je_stelle)
+        with open(a.ziel, "w", encoding="utf-8") as f:
+            for b_ in beispiele:
+                f.write(json.dumps(b_, ensure_ascii=False) + "\n")
+        print(f"{len(beispiele)} Beispiele nach {a.ziel}: {dict(Counter(b_['quelle'] for b_ in beispiele))}")
         return
 
     if a.befehl == "suche-messen":
@@ -197,6 +254,31 @@ def main():
         from .dpo import trainieren as dpo_trainieren
         dpo_trainieren(tok, model, a.daten, a.ziel, a.epochen, a.sammeln, a.lernrate, beta=a.beta,
                        alpha=a.alpha, max_schritte=a.max_schritte)
+
+    elif a.befehl == "raten":
+        import json
+
+        from .agent import Agent, laeufe_erzeugen
+        from .datensatz import _frage_id, gut
+        from .datensatz import laden as laeufe_laden
+
+        ids = {_frage_id(l) for p_ in a.laeufe for l in laeufe_laden(p_) if l["klasse"] == "unbekannt" and gut(l)}
+        with open(a.wissen, encoding="utf-8") as f:
+            auswahl = [dict(z, id=f"{z['id']}#r") for z in map(json.loads, f) if str(z["id"]) in ids]
+        agent = Agent(tok, model, None, aufwand=a.aufwand, ohne_suche=True)
+        laeufe_erzeugen(agent, auswahl, a.ziel, hinweis=False, stapel=a.stapel)
+
+    elif a.befehl == "fortsetzen":
+        from .agent import Agent, fortsetzungen_erzeugen
+        from .datensatz import laden as laeufe_laden
+        from .datensatz import stellen
+        from .suche import Suche
+
+        auswahl = stellen([l for p_ in a.laeufe for l in laeufe_laden(p_) if l["teil"] == "train"])
+        if a.anzahl:
+            auswahl = auswahl[:a.anzahl]
+        agent = Agent(tok, model, Suche(a.index), aufwand=a.aufwand)
+        fortsetzungen_erzeugen(agent, auswahl, a.ziel, a.versuche, a.stapel)
 
     elif a.befehl == "lora-speicher":
         from .lora import lora_vorbereiten, speicher_messen

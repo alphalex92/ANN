@@ -18,3 +18,12 @@ def test_aufteilen_fest_und_disjunkt():
     assert len(halt) == 5 and len(train) == 95
     assert not set(train) & set(halt)
     assert aufteilen(b, 0.05, seed=0) == (train, halt)
+
+
+def test_spannen_ausblenden():
+    from k2_horizon.training import IGNORIEREN as I, spannen_ausblenden
+    labels = [I, 1, 2, I, I, 3, I, 4, 5]
+    assert spannen_ausblenden(labels, 0) == labels
+    assert spannen_ausblenden(labels, 1) == [I, I, I, I, I, 3, I, 4, 5]
+    assert spannen_ausblenden(labels, 2) == [I, I, I, I, I, I, I, 4, 5]
+    assert spannen_ausblenden(labels, 5) == [I] * 9

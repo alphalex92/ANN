@@ -60,3 +60,57 @@ def test_paare_gut_gegen_schlecht():
     assert len(p) == 1  # Frage 7: ein guter Lauf reicht nur für ein Paar; 8 hat keinen guten, 9 keinen schlechten
     assert p[0]["id"] == "7" and p[0]["chosen"][0]["content"] == "0" and p[0]["grund"] == "unnötig gesucht"
     assert p[0]["prompt"] == [{"role": "user", "content": "Q"}]
+
+
+def test_echt_geraten_filtert_artefakte():
+    from k2_horizon.datensatz import echt_geraten
+    basis = {"status": "fertig", "suchen": 0, "richtig": False, "klasse": "unbekannt"}
+    assert echt_geraten(dict(basis, antwort="Cameron Crowe."))
+    assert not echt_geraten(dict(basis, antwort="I'll look up the film to identify its screenwriter."))
+    assert not echt_geraten(dict(basis, antwort='- "web_search": {"query": "x"}</ifm|arg_value>'))
+    assert not echt_geraten(dict(basis, antwort="Lynne Cheney.", richtig=True))
+
+
+def test_echt_geraten_strenger():
+    from k2_horizon.datensatz import echt_geraten
+    b = {"status": "fertig", "suchen": 0, "richtig": False, "klasse": "unbekannt"}
+    for nicht in ("I’m not sure yet. Let me check.", "Looking up the composer for that piece.", "Allo"[:2]):
+        assert not echt_geraten(dict(b, antwort=nicht))
+    assert not echt_geraten(dict(b, klasse="gewusst", antwort="Paris."))
+
+
+def test_entscheidungs_paare_nur_erster_zug():
+    from k2_horizon.datensatz import entscheidungs_paare
+    such = {"role": "assistant", "think_fast": "", "content": "", "tool_calls": [{"type": "function",
+            "function": {"name": "suche", "arguments": {"anfrage": "x"}}}]}
+    antwort = {"role": "assistant", "think_fast": "", "content": "Paris"}
+    treffer = {"role": "tool", "name": "suche", "content": "..."}
+    def lauf(i, klasse, gespraech, richtig, status="fertig"):
+        return {"id": i, "klasse": klasse, "typ": "capital", "status": status, "richtig": richtig,
+                "suchen": sum(m["role"] == "tool" for m in gespraech), "antwort": gespraech[-1].get("content"),
+                "gespraech": [{"role": "user", "content": "Q"}] + gespraech}
+    laeufe = [
+        lauf("1#0", "unbekannt", [such, treffer, such, treffer, such, treffer, such], False, "zu_viele_suchen"),
+        lauf("1#1", "unbekannt", [antwort], False),            # echt geraten
+        lauf("2#0", "gewusst", [antwort], True),
+        lauf("2#1", "gewusst", [such, treffer, antwort], True),  # unnötig gesucht
+    ]
+    p = entscheidungs_paare(laeufe)
+    assert sorted(x["grund"] for x in p) == ["mehr suchen", "weniger suchen"]
+    m = next(x for x in p if x["grund"] == "mehr suchen")
+    assert m["chosen"] == [such] and m["rejected"] == [antwort]  # abgebrochener Lauf zählt, aber nur der erste Zug
+    w = next(x for x in p if x["grund"] == "weniger suchen")
+    assert w["chosen"] == [antwort] and w["rejected"] == [such]
+
+
+def test_fortsetzungs_set_eigene_vor_lehrer():
+    from k2_horizon.datensatz import fortsetzungs_set
+    basis = dict(klasse="unbekannt", status="fertig", gespraech=[{"role": "user", "content": "q"}], start=1)
+    eigene = [dict(basis, id="1#f0", richtig=True, antwort="X"), dict(basis, id="1#f1", richtig=True, antwort="X"),
+              dict(basis, id="2#f0", richtig=False, antwort="Y")]
+    lehrer = [dict(basis, id="1#l", richtig=True, antwort="X"), dict(basis, id="2#l", richtig=True, antwort="Z"),
+              dict(basis, id="3#l", richtig=True, antwort="Please specify which film you mean")]
+    s = fortsetzungs_set(eigene, lehrer)
+    assert sorted((b["id"], b["quelle"]) for b in s) == [("1#f0", "k2"), ("2#l", "lehrer")] or \
+        sorted((b["id"], b["quelle"]) for b in s) == [("1#f1", "k2"), ("2#l", "lehrer")]
+    assert all(b["lernen_ab"] == 1 for b in s)

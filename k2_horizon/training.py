@@ -36,8 +36,28 @@ def beispiele_laden(tok, pfad, max_laenge=8192):
             if len(ids) > max_laenge:
                 continue
             labels = [t if m else IGNORIEREN for t, m in zip(ids, e["assistant_masks"])]
+            if d.get("lernen_ab"):
+                vorher = sum(m["role"] == "assistant" for m in d["messages"][:d["lernen_ab"]])
+                labels = spannen_ausblenden(labels, vorher)
             beispiele.append((ids, labels, d))
     return beispiele
+
+
+def spannen_ausblenden(labels, anzahl):
+    """Setzt die ersten `anzahl` zusammenhängenden gelernten Spannen auf IGNORIEREN.
+
+    Jede Assistenten-Nachricht ist in der Maske genau eine Spanne. So lernt das Modell bei einem
+    fortgesetzten Gespräch nur die neuen Züge, die alten bleiben Kontext."""
+    alt, labels, gesehen = labels, list(labels), 0
+    for i, l in enumerate(alt):
+        if l == IGNORIEREN:
+            continue
+        if i == 0 or alt[i - 1] == IGNORIEREN:
+            if gesehen == anzahl:
+                break
+            gesehen += 1
+        labels[i] = IGNORIEREN
+    return labels
 
 
 def aufteilen(beispiele, anteil=0.05, seed=0):

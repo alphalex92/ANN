@@ -77,9 +77,12 @@ def gedanken_von(nachricht):
 
 
 class Agent:
-    def __init__(self, tok, model, suche, aufwand="medium", max_suchen=3, max_neu=1024):
+    def __init__(self, tok, model, suche, aufwand="medium", max_suchen=3, max_neu=1024, ohne_suche=False):
+        """ohne_suche: Das Werkzeug steht im Prompt, aber die Tokens für einen Aufruf sind gesperrt.
+        So entstehen die Antworten, die das Modell gibt, wenn es rät, mit demselben Prompt wie sonst."""
         self.tok, self.model, self.suche = tok, model, suche
         self.aufwand, self.max_suchen, self.max_neu = aufwand, max_suchen, max_neu
+        self.gesperrt = [tok.convert_tokens_to_ids(t) for t in ("<ifm|tool_calls>", "<ifm|tool_call>")] if ohne_suche else None
         tok.padding_side = "left"
 
     def _prompt(self, gespraech, hinweis):
@@ -110,7 +113,8 @@ class Agent:
                            add_special_tokens=False).to(self.model.device)
             with torch.no_grad():
                 aus = self.model.generate(**enc, max_new_tokens=self.max_neu, do_sample=True,
-                                          temperature=1.0, top_p=0.95, pad_token_id=PAD)
+                                          temperature=1.0, top_p=0.95, pad_token_id=PAD,
+                                          suppress_tokens=self.gesperrt)
             for j, x in zip(teil, aus[:, enc["input_ids"].shape[1]:]):
                 ergebnis[j] = self.tok.decode(x, skip_special_tokens=False)
             teil = [i] if i is not None else []
@@ -122,8 +126,14 @@ class Agent:
         Gibt je Frage ein dict zurück: gespraech (ohne Hinweis), antwort, suchen (Anzahl),
         status ('fertig', 'abgeschnitten' oder 'zu_viele_suchen').
         """
-        laeufe = [{"gespraech": [{"role": "user", "content": FRAGE.format(frage=f)}],
-                   "antwort": None, "suchen": 0, "status": None} for f in fragen]
+        return self.fortsetzen([[{"role": "user", "content": FRAGE.format(frage=f)}] for f in fragen],
+                               [0] * len(fragen), hinweis)
+
+    def fortsetzen(self, gespraeche, suchen, hinweis=False):
+        """Wie `beantworten`, aber ab einem vorhandenen Gesprächsanfang, z. B. direkt nach Suchtreffern.
+        `suchen` zählt die Suchen, die im Anfang schon stecken."""
+        laeufe = [{"gespraech": list(g), "antwort": None, "suchen": n, "status": None}
+                  for g, n in zip(gespraeche, suchen)]
         offen = list(range(len(laeufe)))
         while offen:
             rohe = self._erzeugen([self._prompt(laeufe[i]["gespraech"], hinweis) for i in offen])
@@ -180,4 +190,41 @@ def laeufe_erzeugen(agent, fragen, ziel, hinweis=True, stapel=16):
             n = i + len(teil)
             rate = n / (time.perf_counter() - start)
             print(f"{n}/{len(offen)} Fragen, {rate:.2f}/s, noch etwa {(len(offen) - n) / rate / 60:.0f} min",
+                  flush=True)
+
+
+def fortsetzungen_erzeugen(agent, stellen, ziel, versuche=8, stapel=16):
+    """Setzt jede Stelle `versuche`-mal fort und hängt die Läufe an `ziel` an.
+
+    Eine Stelle ist ein Gesprächsanfang, der mit Suchtreffern endet (siehe datensatz.stellen).
+    Jeder Lauf bekommt die ID "<frage>#f<k>" und das Feld `start`: ab dort ist das Gespräch neu.
+    Bereits erledigte IDs werden übersprungen.
+    """
+    import json
+    import os
+    import time
+
+    from .bewertung import richtig
+
+    fertig = set()
+    if os.path.exists(ziel):
+        with open(ziel, encoding="utf-8") as f:
+            fertig = {json.loads(z)["id"] for z in f if z.strip()}
+    auftraege = [(s, f"{s['id']}#f{k}") for s in stellen for k in range(versuche)]
+    offen = [(s, i) for s, i in auftraege if i not in fertig]
+    print(f"{len(stellen)} Stellen × {versuche}: {len(fertig)} schon erledigt, {len(offen)} offen", flush=True)
+    start = time.perf_counter()
+    with open(ziel, "a", encoding="utf-8") as datei:
+        for i in range(0, len(offen), stapel):
+            teil = offen[i:i + stapel]
+            laeufe = agent.fortsetzen([s["gespraech"] for s, _ in teil], [s["suchen"] for s, _ in teil])
+            for (s, lid), lauf in zip(teil, laeufe):
+                zeile = {k: s[k] for k in ("frage", "typ", "loesungen", "klasse", "teil", "quelle")}
+                zeile.update(lauf, id=lid, start=len(s["gespraech"]), aufwand=agent.aufwand, hinweis=False,
+                             richtig=lauf["antwort"] is not None and richtig(lauf["antwort"], s["loesungen"]))
+                datei.write(json.dumps(zeile, ensure_ascii=False) + "\n")
+            datei.flush()
+            n = i + len(teil)
+            rate = n / (time.perf_counter() - start)
+            print(f"{n}/{len(offen)} Fortsetzungen, {rate:.2f}/s, noch etwa {(len(offen) - n) / rate / 60:.0f} min",
                   flush=True)
