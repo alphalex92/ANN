@@ -281,3 +281,17 @@ def fortsetzungs_set(eigene, lehrer, je_stelle=1, seed=0):
             beispiele.append(dict(l, quelle_art="lehrer"))
     return [{"id": l["id"], "klasse": l["klasse"], "quelle": l["quelle_art"], "tools": [WERKZEUG],
              "messages": l["gespraech"], "lernen_ab": l["start"]} for l in beispiele]
+
+
+def such_beispiele(laeufe, anzahl, seed=0):
+    """Ganze gute Suchläufe zu unbekannten Fragen (je Frage einer), als Gegengewicht zum
+    Fortsetzungs-Set: Sie zeigen, dass bei Unbekanntem zuerst gesucht wird."""
+    import random
+
+    je_frage = {}
+    for l in laeufe:
+        if l["klasse"] == "unbekannt" and gut(l) and not ausweichend(l["antwort"]):
+            je_frage.setdefault(_frage_id(l), l)
+    auswahl = random.Random(seed).sample(sorted(je_frage.values(), key=lambda l: l["id"]), min(anzahl, len(je_frage)))
+    return [{"id": l["id"], "klasse": l["klasse"], "quelle": "suchlauf", "tools": [WERKZEUG],
+             "messages": l["gespraech"]} for l in auswahl]

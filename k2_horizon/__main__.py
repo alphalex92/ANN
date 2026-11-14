@@ -117,6 +117,9 @@ def main():
     b.add_argument("--lehrer", default="/mnt/nvme2/daten/k2/laeufe_lehrer.jsonl")
     b.add_argument("--ziel", default="/mnt/nvme2/daten/k2/sft_fortsetzen.jsonl")
     b.add_argument("--je-stelle", type=int, default=1)
+    b.add_argument("--suchlaeufe", type=int, default=0, help="so viele ganze gute Suchläufe dazumischen")
+    b.add_argument("--laeufe", nargs="+", default=["/mnt/nvme2/daten/k2/laeufe_paare.jsonl",
+                                                   "/mnt/nvme2/daten/k2/laeufe.jsonl"])
 
     a = p.parse_args()
 
@@ -153,6 +156,10 @@ def main():
 
         lehrer_ = laeufe_laden(a.lehrer) if os.path.exists(a.lehrer) else []
         beispiele = fortsetzungs_set(laeufe_laden(a.eigene), lehrer_, a.je_stelle)
+        if a.suchlaeufe:
+            from .datensatz import such_beispiele
+            beispiele += such_beispiele([l for p_ in a.laeufe for l in laeufe_laden(p_) if l["teil"] == "train"],
+                                        a.suchlaeufe)
         with open(a.ziel, "w", encoding="utf-8") as f:
             for b_ in beispiele:
                 f.write(json.dumps(b_, ensure_ascii=False) + "\n")

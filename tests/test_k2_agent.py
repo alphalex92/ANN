@@ -114,3 +114,14 @@ def test_fortsetzungs_set_eigene_vor_lehrer():
     assert sorted((b["id"], b["quelle"]) for b in s) == [("1#f0", "k2"), ("2#l", "lehrer")] or \
         sorted((b["id"], b["quelle"]) for b in s) == [("1#f1", "k2"), ("2#l", "lehrer")]
     assert all(b["lernen_ab"] == 1 for b in s)
+
+
+def test_such_beispiele_je_frage_einer():
+    from k2_horizon.datensatz import such_beispiele
+    basis = dict(klasse="unbekannt", status="fertig", richtig=True, suchen=1, antwort="X",
+                 gespraech=[{"role": "user", "content": "q"}])
+    laeufe = [dict(basis, id="1#0"), dict(basis, id="1#1"), dict(basis, id="2"),
+              dict(basis, id="3", suchen=0), dict(basis, id="4", richtig=False)]
+    s = such_beispiele(laeufe, 10)
+    assert sorted(b["id"].split("#")[0] for b in s) == ["1", "2"]
+    assert all("lernen_ab" not in b for b in s)
