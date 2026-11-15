@@ -41,6 +41,8 @@ class Konfig:
     kern: int = 2  # Blöcke in der Schleife
     hinten: int = 1  # Blöcke nach der Schleife
     positionen: str = "rope"  # "rope" oder "keine"
+    gedaechtnis: int = 0  # 0: keins, sonst n: Gedächtnisschicht mit n·n Plätzen (siehe Gedaechtnis)
+    gedaechtnis_k: int = 8  # so viele Plätze liest jede Stelle
 
 
 def rope_tabellen(laenge, kopfbreite, geraet):
@@ -92,6 +94,40 @@ class Block(nn.Module):
         return x + self.runter(F.gelu(self.hoch(self.norm2(x))))
 
 
+class Gedaechtnis(nn.Module):
+    """Eine Gedächtnisschicht mit Produkt-Schlüsseln (Lample et al. 2019, „Memory Layers at Scale“).
+
+    Es gibt n·n Plätze, jeder mit einem Wert-Vektor. Die Anfrage wird in zwei Hälften
+    geteilt, jede Hälfte sucht unter nur n Teilschlüsseln ihre besten k. Aus den k·k
+    Kombinationen bleiben die besten k Plätze, deren Werte gewichtet addiert werden.
+    So bleibt das Nachschlagen billig, obwohl es viele Plätze gibt.
+
+    Der Witz für das wachsende Gedächtnis: Jede Stelle liest nur k Plätze. Lernt man neue
+    Fakten, ändern sich fast nur deren Plätze, der Rest des Modells (das Denken) kann
+    eingefroren bleiben.
+    """
+
+    HALB = 64  # Breite einer Anfragehälfte
+
+    def __init__(self, k: Konfig):
+        super().__init__()
+        self.n, self.k = k.gedaechtnis, k.gedaechtnis_k
+        self.norm = nn.LayerNorm(k.breite)
+        self.anfrage = nn.Linear(k.breite, 2 * self.HALB, bias=False)
+        self.schluessel = nn.Parameter(torch.randn(2, self.n, self.HALB) / math.sqrt(self.HALB))
+        self.werte = nn.Embedding(self.n * self.n, k.breite)
+
+    def forward(self, x):
+        q1, q2 = self.anfrage(self.norm(x)).chunk(2, dim=-1)
+        w1, i1 = (q1 @ self.schluessel[0].T.to(q1.dtype)).topk(self.k, dim=-1)
+        w2, i2 = (q2 @ self.schluessel[1].T.to(q2.dtype)).topk(self.k, dim=-1)
+        punkte = (w1.unsqueeze(-1) + w2.unsqueeze(-2)).flatten(-2)
+        plaetze = (i1.unsqueeze(-1) * self.n + i2.unsqueeze(-2)).flatten(-2)
+        punkte, j = punkte.topk(self.k, dim=-1)
+        gewichte = punkte.float().softmax(dim=-1)
+        return (self.werte(plaetze.gather(-1, j)) * gewichte.unsqueeze(-1)).sum(dim=-2)
+
+
 class SchleifenGPT(nn.Module):
     def __init__(self, k: Konfig):
         super().__init__()
@@ -102,6 +138,7 @@ class SchleifenGPT(nn.Module):
         self.vorne = nn.ModuleList(Block(k) for _ in range(k.vorne))
         self.kern = nn.ModuleList(Block(k) for _ in range(k.kern))
         self.hinten = nn.ModuleList(Block(k) for _ in range(k.hinten))
+        self.gedaechtnis = Gedaechtnis(k) if k.gedaechtnis else None
         # Einspeisen: aus [normierter Zustand h, Eingabe e] wird der neue Zustand.
         self.zustand_norm = nn.LayerNorm(k.breite)
         self.einspeisen = nn.Linear(2 * k.breite, k.breite, bias=False)
@@ -147,6 +184,9 @@ class SchleifenGPT(nn.Module):
             h = self.einspeisen(torch.cat([self.zustand_norm(h), e], dim=-1))
             for block in self.kern:
                 h = block(h, rope)
+        if self.gedaechtnis is not None:
+            # nach dem Denken nachsehen, was man weiß; hinten entscheidet dann: wissen oder suchen
+            h = h + self.gedaechtnis(h)
         for block in self.hinten:
             h = block(h, rope)
         logits = self.kopf(self.norm(h))

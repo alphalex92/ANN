@@ -12,7 +12,7 @@ from pathlib import Path
 
 import torch
 
-from . import messung, welt
+from . import gedaechtnis, messung, welt
 from .modell import SchleifenGPT
 from .training import bereich, trainieren
 
@@ -56,7 +56,48 @@ def main():
     m.add_argument("--schleifen", default="1,2,4,8")
     m.add_argument("--anzahl", type=int, default=500)
 
+    k = unter.add_parser("kindheit", help="Gedächtnis-Experiment: Kern mit Gedächtnisschicht vortrainieren")
+    k.add_argument("--name", required=True)
+    k.add_argument("--minuten", type=float, default=10.0)
+    k.add_argument("--plaetze", type=int, default=64, help="Gedächtnis mit plaetze² Plätzen")
+    k.add_argument("--seed", type=int, default=0)
+    k.add_argument("--stapel", type=int, default=256)
+    k.add_argument("--kern-faktor", type=float, default=1.0, help="Lernrate des Denkens relativ zu 1e-3")
+    k.add_argument("--welten", type=int, default=1, help="so viele Kindheitswelten, Gedächtnis je Welt gelöscht")
+    k.add_argument("--gpu-anteil", type=float, default=None, help="höchstens so viel GPU-Speicher nutzen")
+
+    l = unter.add_parser("leben", help="Gedächtnis-Experiment: Tage mit Recherche, Sichten und Schlaf")
+    l.add_argument("--name", required=True)
+    l.add_argument("--tage", type=int, default=8)
+    l.add_argument("--fragen", type=int, default=200, help="Fragen je Tag")
+    l.add_argument("--festigen", choices=["gedaechtnis", "ganz", "keiner"], default="gedaechtnis")
+    l.add_argument("--sichten", choices=["pruefen", "alles"], default="pruefen")
+    l.add_argument("--schlaf", type=int, default=300, help="Übungsschritte je Nacht")
+    l.add_argument("--wandel-tag", type=int, default=None, help="an diesem Morgen ändert sich ein Teil der Welt")
+    l.add_argument("--gpu-anteil", type=float, default=None)
+
     a = p.parse_args()
+    if getattr(a, "gpu_anteil", None) and torch.cuda.is_available():
+        torch.cuda.set_per_process_memory_fraction(a.gpu_anteil)
+    if a.befehl == "kindheit":
+        modell, info = gedaechtnis.kindheit(gedaechtnis.neue_welt(a.seed), a.minuten, plaetze=a.plaetze, seed=a.seed,
+                                              stapel=a.stapel, welten=a.welten,
+                                              kern_faktor=a.kern_faktor)
+        kwelt = gedaechtnis.neue_welt(a.seed)
+        info |= {"seed": a.seed, "test": {
+            art: gedaechtnis.messen(modell, art, dict(kwelt.kindheit)) for art in ("kindheit", "neu")}}
+        print(json.dumps(info["test"], indent=1))
+        modell.speichern(LAEUFE / a.name / "kindheit.pt", **info)
+        return
+    if a.befehl == "leben":
+        modell, info = SchleifenGPT.laden(LAEUFE / a.name / "kindheit.pt")
+        modell.to("cuda" if torch.cuda.is_available() else "cpu")
+        variante = f"{a.festigen}-{a.sichten}" + (f"-wandel{a.wandel_tag}" if a.wandel_tag else "")
+        print(f"Leben {a.name}, Variante {variante}")
+        tagebuch = gedaechtnis.leben(modell, gedaechtnis.neue_welt(info["seed"]), a.tage, a.fragen, a.festigen,
+                                     a.sichten, a.schlaf, a.wandel_tag)
+        (LAEUFE / a.name / f"leben-{variante}.json").write_text(json.dumps(tagebuch, indent=1))
+        return
     if a.befehl == "beispiel":
         ep = welt.neue_episode(random.Random(a.seed), a.hops)
         for tokens, eigen in welt.folgen(ep, a.modus):

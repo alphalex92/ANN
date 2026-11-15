@@ -234,3 +234,69 @@ einen kurzen Notizzettel führen, statt über den wachsenden Verlauf.
 Einschränkung: In dieser Spielwelt ist jeder einzelne Schritt leicht. Wie gut sich das auf
 echte Fragen überträgt, bei denen schon das Lesen eines Treffers schwer ist, zeigt erst ein
 Versuch mit K2.
+
+### Vierter Lauf: wachsendes Gedächtnis mit Schlaf
+
+`denkkern/gedaechtnis.py`. Die Welt hat jetzt 16 Beziehungen. r0–r3 sind seit der Kindheit
+fest, und die Hälfte dieser Fakten lernt das Modell auswendig. r8–r11 werden erst im Leben
+fest. Alle anderen Beziehungen bleiben flüchtig und werden in jeder Episode neu gewürfelt,
+wie Tagesnachrichten. Auf dem Notizzettel gibt es eine dritte Aktion: `W y` heißt „das
+weiß ich“. Die Umgebung prüft das nicht. Ein falsches `W` ist eine Halluzination.
+
+Das Modell ist der Schleifenkern mit NoPE und einer Gedächtnisschicht mit Produkt-Schlüsseln
+(4.096 Plätze, Lample et al. 2019) nach der Schleife. Es hat 4,4 M Parameter, davon 1 M für
+die Werte des Gedächtnisses.
+
+Ein Lebenstag läuft so ab:
+1. Morgens wird auf festen Testfragen gemessen.
+2. Das Modell beantwortet 200 Fragen auf r8–r15 mit Suche.
+3. Sichten: Ein Fakt gilt als gesichert, wenn die letzten zwei Suchen dasselbe ergaben.
+4. Nachts träumt es: Aus den gesicherten Fakten werden Übungsketten erfunden, gemischt mit
+   Kindheitsketten, 300 Schritte.
+
+```bash
+python -m denkkern kindheit --name g4 --minuten 15 --welten 150 --kern-faktor 0.1 --stapel 64
+python -m denkkern leben --name g4 --festigen ganz --sichten pruefen
+```
+
+**Die Kindheit entscheidet, ob das Gedächtnis überhaupt benutzt wird.** Lernt alles gemeinsam
+in einer Welt, legt das Modell die Fakten in den normalen Schichten ab. Die Gedächtnisschicht
+bleibt dann ungenutzt: Setzt man ihre Werte auf 0, ändert sich nichts. Sie liest für alle
+1.024 Paare dieselben 6 Plätze.
+
+Genutzt wird sie erst unter drei Bedingungen zusammen:
+- 150 kurze Kindheitswelten,
+- nach jeder Welt werden die Werte gelöscht,
+- das Gedächtnis lernt 100-mal schneller als das Denken.
+
+Löscht man das Gedächtnis dann, fällt die Kindheit von 100 % auf 68 % richtig.
+
+Die Ergebnisse nach 8 Tagen vom selben Kindheitsmodell g4. Gemessen wurde am Morgen von
+Tag 9, jeweils auf 500 Testfragen:
+
+| Festigen | Sichten | neu richtig | Suchen/Frage | gewusst (r8–r11) | Halluzinationen/Frage | alt richtig |
+|---|---|---|---|---|---|---|
+| kein Schlaf | – | 100 % | 2,48 | 0 % | 0,00 | 100 % |
+| nur Gedächtnisschicht | prüfen | 76 % | 1,21 | 78 % | 0,26 | 97 % |
+| nur Gedächtnisschicht | alles | 18 % | 0,07 | 65 % | 1,54 | 95 % |
+| **ganzes Modell** | **prüfen** | **89 %** | **1,11** | **98 %** | **0,11** | **100 %** |
+| nur Gedächtnisschicht, Wandel an Tag 5 | prüfen | 58 % | 1,16 | 61 % | 0,53 | 96 % |
+
+Was man sieht:
+- **Wissen spart Arbeit, kostet aber Genauigkeit.** Das ganze Modell weiß nach 8 Tagen 98 %
+  der neuen Fakten und sucht 55 % weniger. Dafür halluziniert es etwa jede neunte Frage. In
+  dieser Welt ist die Suche immer richtig, deshalb kann Wissen hier nur schaden oder Zeit
+  sparen. Bei echter, fehlbarer Suche könnte das anders aussehen.
+- **Ungeprüft festigen ist verheerend.** Mit „alles“ werden auch flüchtige Fakten gefestigt.
+  Das Modell hört praktisch auf zu suchen und behauptet 1,5 falsche Fakten pro Frage.
+- **Nur das Gedächtnis zu festigen ist schlechter als das ganze Modell.** Bei 78 % Wissen
+  steht es bei 0,26 Halluzinationen pro Frage. Die Fakten in die Schicht zu schreiben,
+  gelingt. Die Entscheidung „weiß ich das?“ steckt aber im eingefrorenen Denken. Dieses hat
+  nur Gedächtnisinhalte aus der Kindheit gesehen und verlässt sich auf die neuen Inhalte zu
+  sehr oder zu wenig.
+- **Veraltetes Wissen korrigiert sich nicht.** Nach dem Wandel an Tag 5 bleiben 46 falsche
+  Fakten bis zum Ende gesichert. Was das Modell zu wissen glaubt, schlägt es nie mehr nach.
+  Darum sieht es die Änderung auch nie. Es bräuchte Stichproben: Gewusstes ab und zu
+  trotzdem nachschlagen.
+- Die Kindheit mit vielen Welten hilft auch beim Festigen des ganzen Modells. g1 mit einer
+  Welt kommt dabei nur auf 83 % richtig und 0,18 Halluzinationen pro Frage.
