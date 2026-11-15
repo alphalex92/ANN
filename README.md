@@ -312,3 +312,35 @@ Ohne jedes Training, dieselben 300 Validierungsfragen:
 - Die gewussten Fragen (54) schwanken zwischen den Läufen um bis zu 10 Punkte, obwohl der erste
   Zug in allen Varianten gleich ist. Das ist Zufall beim Erzeugen (Temperatur 1,0), kein Effekt
   des Notizzettels.
+
+#### Kleinere Kerne im selben Harness: Qwen3.5 0,8B und 2B
+
+Die Frage: Wie klein darf der Kern sein, wenn das Wissen aus der Suche kommt? `agent.Format`
+erkennt am Vokabular, ob K2 oder Qwen3.5 läuft. Das Modell wählt man über `K2_PFAD`:
+
+```bash
+K2_PFAD=/mnt/nvme2/modelle/Qwen3.5-0.8B python -m k2_horizon messen --notiz stand --ziel /mnt/nvme2/daten/k2/messung_qwen0.8B_stand.jsonl
+```
+
+Dieselben 300 Fragen. Die Klassen gewusst/unbekannt/unklar stammen aus der Wissensprüfung von K2.
+
+| | K2 3,7B | K2 + stand | Qwen 0,8B | **Qwen 0,8B + stand** | Qwen 2B | Qwen 2B + stand |
+|---|---|---|---|---|---|---|
+| **gesamt richtig** | 62 % | **67 %** | 58 % | **61 %** | 54 % | 60 % |
+| unbekannt: richtig | 49 % | 53 % | 48 % | 49 % | 43 % | 50 % |
+| unbekannt: abgebrochen | 29 % | 17 % | 22 % | 2 % | 14 % | 6 % |
+| unbekannt: geraten, falsch | 6 % | 3 % | 4 % | 2 % | 16 % | 12 % |
+| gewusst (K2): ohne Suche | 65 % | 56 % | 26 % | 24 % | 74 % | 61 % |
+| Suchen je Frage | 1,45 | 1,34 | 1,58 | 0,99 | 1,03 | 0,85 |
+| Fragen je Sekunde | – | 0,35 | 0,25 | 0,62 | – | 0,39 |
+| VRAM für Gewichte | 9,4 GB | 9,4 GB | 1,4 GB | 1,4 GB | etwa 4 GB | etwa 4 GB |
+
+- **Qwen 0,8B mit Notizzettel liegt so gut wie K2 ohne**, 61 gegen 62 %, bei einem Siebtel
+  des Speichers und fast doppeltem Tempo. Mit Notizzettel bleibt K2 6 Punkte vorn.
+- **0,8B verhält sich wie ein Kern:** Es sucht fast immer, auch bei Fragen, die K2 auswendig
+  weiß, und rät kaum. Mit Notizzettel bricht es so gut wie nie ab (2 %).
+- **2B ist schlechter als 0,8B.** Es rät viel öfter (12–16 %), traut seinem eigenen Wissen
+  also mehr, als es sollte.
+- **Die Schwäche von 0,8B ist das Lesen:** 104 Antworten „gesucht, aber falsch“, bei 44 davon
+  stand die Lösung in den Treffern. Bei K2 + stand sind es 57 und 26.
+- Nach den Suchtreffern denkt Qwen meist gar nicht nach (leerer Denkteil) und antwortet sofort.

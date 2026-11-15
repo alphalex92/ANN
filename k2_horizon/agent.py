@@ -93,7 +93,7 @@ def ansicht(gespraech, notiz, max_suchen):
     neu = []
     for i, m in enumerate(gespraech):
         if m["role"] == "assistant":
-            m = {k: ("" if k in DENK_FELD.values() else v) for k, v in m.items()}
+            m = {k: ("" if k in ALLE_DENK_FELDER else v) for k, v in m.items()}
         elif m["role"] == "tool" and i < letzter_zug:
             titel = "; ".join(f"[{n}] {x}" for n, x in _TITEL.findall(m["content"]))
             m = {**m, "content": f"(Already read, shown in short: {titel or 'no results'})"}
@@ -107,8 +107,59 @@ def ansicht(gespraech, notiz, max_suchen):
     return neu
 
 
+# --- Qwen3.5: andere Tags, gleiche Gesprächsform -------------------------------------
+# Die Chat-Vorlage von Qwen3.5 erwartet die Gedanken im Feld "reasoning_content" und schreibt
+# Werkzeugaufrufe als <tool_call><function=suche><parameter=anfrage>…</parameter></function>.
+
+QWEN_DENK_FELD = "reasoning_content"
+_Q_AUFRUF = re.compile(r"<tool_call>\s*<function=([^>\n]+)>(.*?)</function>\s*</tool_call>", re.S)
+_Q_ARGUMENT = re.compile(r"<parameter=([^>\n]+)>\n?(.*?)\n?</parameter>", re.S)
+_Q_ENDE = re.compile(r"<\|(im_end|endoftext)\|>.*", re.S)
+
+
+def zerlegen_qwen(roh, aufwand=None):
+    """Wie `zerlegen`, für Qwen3.5. Der Prompt endet mit "<think>\\n", die Ausgabe also mit den Gedanken."""
+    if "</think>" not in roh:
+        return None
+    gedanken, rest = roh.split("</think>", 1)
+    rest = _Q_ENDE.sub("", rest)
+    nachricht = {"role": "assistant", QWEN_DENK_FELD: gedanken.strip()}
+    if "<tool_call>" in rest:
+        inhalt = rest.split("<tool_call>", 1)[0]
+        aufrufe = [{"type": "function", "function": {
+            "name": name.strip(), "arguments": {k.strip(): v.strip() for k, v in _Q_ARGUMENT.findall(rumpf)}}}
+            for name, rumpf in _Q_AUFRUF.findall(rest)]
+        nachricht["content"] = inhalt.strip()
+        nachricht["tool_calls"] = aufrufe
+    else:
+        nachricht["content"] = rest.strip()
+    return nachricht
+
+
+class Format:
+    """Was am Modell hängt: wie man den Prompt baut, die Ausgabe zerlegt und den Aufruf sperrt."""
+
+    def __init__(self, name, zerleger, prompt_optionen, sperr_tokens, pad):
+        self.name, self.zerleger, self.sperr_tokens, self.pad = name, zerleger, sperr_tokens, pad
+        self.prompt_optionen = prompt_optionen  # Funktion aufwand → zusätzliche Argumente der Vorlage
+
+    @classmethod
+    def fuer(cls, tok):
+        vokabular = tok.get_vocab()
+        if "<ifm|tool_call>" in vokabular:
+            return cls("k2", zerlegen, lambda a: {"reasoning_effort": a},
+                       ("<ifm|tool_calls>", "<ifm|tool_call>"), PAD)
+        if "<tool_call>" in vokabular:
+            return cls("qwen", zerlegen_qwen, lambda a: {"enable_thinking": True},
+                       ("<tool_call>",), tok.pad_token_id)
+        raise ValueError("unbekanntes Format: weder <ifm|tool_call> noch <tool_call> im Vokabular")
+
+
+ALLE_DENK_FELDER = (*DENK_FELD.values(), QWEN_DENK_FELD)
+
+
 def gedanken_von(nachricht):
-    for feld in DENK_FELD.values():
+    for feld in ALLE_DENK_FELDER:
         if feld in nachricht:
             return nachricht[feld]
     return ""
@@ -123,7 +174,8 @@ class Agent:
         self.tok, self.model, self.suche = tok, model, suche
         self.aufwand, self.max_suchen, self.max_neu = aufwand, max_suchen, max_neu
         self.notiz = notiz
-        self.gesperrt = [tok.convert_tokens_to_ids(t) for t in ("<ifm|tool_calls>", "<ifm|tool_call>")] if ohne_suche else None
+        self.format = Format.fuer(tok)
+        self.gesperrt = [tok.convert_tokens_to_ids(t) for t in self.format.sperr_tokens] if ohne_suche else None
         tok.padding_side = "left"
 
     def _prompt(self, gespraech, hinweis):
@@ -131,7 +183,7 @@ class Agent:
                        + ansicht(gespraech, self.notiz, self.max_suchen))
         return self.tok.apply_chat_template(
             nachrichten, tools=[WERKZEUG], add_generation_prompt=True, tokenize=False,
-            reasoning_effort=self.aufwand,
+            **self.format.prompt_optionen(self.aufwand),
         )
 
     def _erzeugen(self, prompts):
@@ -155,7 +207,7 @@ class Agent:
                            add_special_tokens=False).to(self.model.device)
             with torch.no_grad():
                 aus = self.model.generate(**enc, max_new_tokens=self.max_neu, do_sample=True,
-                                          temperature=1.0, top_p=0.95, pad_token_id=PAD,
+                                          temperature=1.0, top_p=0.95, pad_token_id=self.format.pad,
                                           suppress_tokens=self.gesperrt)
             for j, x in zip(teil, aus[:, enc["input_ids"].shape[1]:]):
                 ergebnis[j] = self.tok.decode(x, skip_special_tokens=False)
@@ -182,7 +234,7 @@ class Agent:
             weiter = []
             for i, roh in zip(offen, rohe):
                 lauf = laeufe[i]
-                nachricht = zerlegen(roh, self.aufwand)
+                nachricht = self.format.zerleger(roh, self.aufwand)
                 if nachricht is None:
                     lauf["status"] = "abgeschnitten"
                     continue

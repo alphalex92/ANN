@@ -165,3 +165,49 @@ def test_ansicht_stand_zaehlt_die_suchen():
     assert ansicht(g, "stand", 2)[-1]["content"].endswith("No searches left: answer now from the passages.")
     nur_frage = g[:1]
     assert ansicht(nur_frage, "stand", 3) == nur_frage
+
+
+QWEN_AUFRUF = ("We should search.\n</think>\n\n<tool_call>\n<function=suche>\n<parameter=anfrage>\n"
+               "Şeref Has birthplace\n</parameter>\n</function>\n</tool_call><|im_end|>")
+
+
+def test_zerlegen_qwen_werkzeugaufruf():
+    from k2_horizon.agent import zerlegen_qwen
+    n = zerlegen_qwen(QWEN_AUFRUF)
+    assert gedanken_von(n) == "We should search."
+    assert n["content"] == ""
+    assert n["tool_calls"] == [{"type": "function", "function": {
+        "name": "suche", "arguments": {"anfrage": "Şeref Has birthplace"}}}]
+
+
+def test_zerlegen_qwen_antwort_und_abgeschnitten():
+    from k2_horizon.agent import zerlegen_qwen
+    n = zerlegen_qwen("Known.\n</think>\n\nIstanbul.<|im_end|>\n<|endoftext|>")
+    assert n["content"] == "Istanbul." and "tool_calls" not in n
+    assert zerlegen_qwen("still thinking") is None
+
+
+def test_format_wird_am_vokabular_erkannt():
+    from k2_horizon.agent import Format, zerlegen, zerlegen_qwen
+
+    class Tok:
+        def __init__(self, vokabular, pad=None):
+            self.vokabular, self.pad_token_id = vokabular, pad
+
+        def get_vocab(self):
+            return self.vokabular
+
+    assert Format.fuer(Tok({"<ifm|tool_call>": 5})).zerleger is zerlegen
+    q = Format.fuer(Tok({"<tool_call>": 7}, pad=9))
+    assert q.zerleger is zerlegen_qwen and q.pad == 9
+    assert q.prompt_optionen("medium") == {"enable_thinking": True}
+    with pytest.raises(ValueError):
+        Format.fuer(Tok({}))
+
+
+def test_ansicht_kompakt_leert_auch_qwen_gedanken():
+    from k2_horizon.agent import ansicht
+    g = [{"role": "user", "content": "Q"},
+         {"role": "assistant", "reasoning_content": "hmm", "content": "", "tool_calls": []},
+         {"role": "tool", "name": "suche", "content": "[1] A\ntext"}]
+    assert ansicht(g, "kompakt", 3)[1]["reasoning_content"] == ""
