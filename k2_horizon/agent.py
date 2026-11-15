@@ -167,13 +167,18 @@ def gedanken_von(nachricht):
 
 class Agent:
     def __init__(self, tok, model, suche, aufwand="medium", max_suchen=3, max_neu=1024, ohne_suche=False,
-                 notiz=None):
+                 notiz=None, denkanstoss=None, token_budget=TOKEN_BUDGET, mitschnitt=False):
         """ohne_suche: Das Werkzeug steht im Prompt, aber die Tokens für einen Aufruf sind gesperrt.
         So entstehen die Antworten, die das Modell gibt, wenn es rät, mit demselben Prompt wie sonst.
-        notiz: None, "kompakt" oder "stand", siehe `ansicht`."""
+        notiz: None, "kompakt" oder "stand", siehe `ansicht`.
+        denkanstoss: Text, mit dem der Denkteil nach Suchtreffern schon beginnt, z. B. "Which passage
+            answers the question?". Er steht im Prompt und ist Teil der gespeicherten Gedanken.
+        token_budget: Tokens je Teilstapel beim Erzeugen. Kleine Modelle vertragen mehr.
+        mitschnitt: Je Zug den genauen Prompt und die erzeugten Token-IDs in lauf["zuege"] ablegen,
+            für das RL-Training."""
         self.tok, self.model, self.suche = tok, model, suche
         self.aufwand, self.max_suchen, self.max_neu = aufwand, max_suchen, max_neu
-        self.notiz = notiz
+        self.notiz, self.denkanstoss, self.token_budget, self.mitschnitt = notiz, denkanstoss, token_budget, mitschnitt
         self.format = Format.fuer(tok)
         self.gesperrt = [tok.convert_tokens_to_ids(t) for t in self.format.sperr_tokens] if ohne_suche else None
         tok.padding_side = "left"
@@ -200,7 +205,7 @@ class Agent:
         for i in reihenfolge + [None]:
             if i is not None:
                 breite = laengen[i] + self.max_neu  # sortiert: das neue ist das längste
-                if not teil or (len(teil) + 1) * breite <= TOKEN_BUDGET:
+                if not teil or (len(teil) + 1) * breite <= self.token_budget:
                     teil.append(i)
                     continue
             enc = self.tok([prompts[j] for j in teil], return_tensors="pt", padding=True,
@@ -209,8 +214,10 @@ class Agent:
                 aus = self.model.generate(**enc, max_new_tokens=self.max_neu, do_sample=True,
                                           temperature=1.0, top_p=0.95, pad_token_id=self.format.pad,
                                           suppress_tokens=self.gesperrt)
-            for j, x in zip(teil, aus[:, enc["input_ids"].shape[1]:]):
-                ergebnis[j] = self.tok.decode(x, skip_special_tokens=False)
+            for j, x in zip(teil, aus[:, enc["input_ids"].shape[1]:].tolist()):
+                while x and x[-1] == self.format.pad:  # Auffüllung nach dem Ende abschneiden
+                    x.pop()
+                ergebnis[j] = (self.tok.decode(x, skip_special_tokens=False), x)
             teil = [i] if i is not None else []
         return ergebnis
 
@@ -230,11 +237,16 @@ class Agent:
                   for g, n in zip(gespraeche, suchen)]
         offen = list(range(len(laeufe)))
         while offen:
-            rohe = self._erzeugen([self._prompt(laeufe[i]["gespraech"], hinweis) for i in offen])
+            anstoesse = [self.denkanstoss if self.denkanstoss and laeufe[i]["gespraech"][-1]["role"] == "tool"
+                         else "" for i in offen]
+            prompts = [self._prompt(laeufe[i]["gespraech"], hinweis) + a for i, a in zip(offen, anstoesse)]
+            rohe = self._erzeugen(prompts)
             weiter = []
-            for i, roh in zip(offen, rohe):
+            for i, (text, ids), prompt, anstoss in zip(offen, rohe, prompts, anstoesse):
                 lauf = laeufe[i]
-                nachricht = self.format.zerleger(roh, self.aufwand)
+                if self.mitschnitt:
+                    lauf.setdefault("zuege", []).append({"prompt": prompt, "ids": ids})
+                nachricht = self.format.zerleger(anstoss + text, self.aufwand)
                 if nachricht is None:
                     lauf["status"] = "abgeschnitten"
                     continue

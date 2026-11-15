@@ -9,7 +9,7 @@ from .verlust import blockweiser_verlust
 ZIELE = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
 
 
-def lora_vorbereiten(model, rang=16):
+def lora_vorbereiten(model, rang=16, ziele=ZIELE):
     """Hängt LoRA-Adapter an und schaltet Gradient Checkpointing ein.
 
     Wichtig: `model.train()`. Nach dem Laden steht das Modell im Auswertungsmodus, und dann
@@ -19,7 +19,7 @@ def lora_vorbereiten(model, rang=16):
     model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
     model.enable_input_require_grads()
     model = get_peft_model(model, LoraConfig(
-        r=rang, lora_alpha=2 * rang, lora_dropout=0.0, task_type="CAUSAL_LM", target_modules=ZIELE,
+        r=rang, lora_alpha=2 * rang, lora_dropout=0.0, task_type="CAUSAL_LM", target_modules=ziele,
     ))
     model.train()
     return model

@@ -67,6 +67,8 @@ def main():
     v.add_argument("--stapel", type=int, default=16)
     v.add_argument("--nur-auswertung", action="store_true")
     v.add_argument("--notiz", choices=["kompakt", "stand"], help="Notizzettel statt ganzem Verlauf, siehe agent.ansicht")
+    v.add_argument("--denkanstoss", help="Anfang des Denkteils nach Suchtreffern, z. B. 'Which passage answers the question?'")
+    v.add_argument("--token-budget", type=int, default=24_000, help="Tokens je Teilstapel beim Erzeugen")
 
     r = unter.add_parser("trainieren", help="LoRA-Training auf den ausgewählten Lösungswegen")
     r.add_argument("--daten", default="/mnt/nvme2/daten/k2/sft_train.jsonl")
@@ -86,6 +88,21 @@ def main():
     d.add_argument("--beta", type=float, default=0.1)
     d.add_argument("--alpha", type=float, default=1.0, help="Gewicht des SFT-Anteils auf dem guten Lauf")
     d.add_argument("--max-schritte", type=int)
+
+    q = unter.add_parser("grpo", help="RL im Harness: Läufe erzeugen, gegeneinander vergleichen, LoRA anpassen")
+    q.add_argument("--wissen", default="/mnt/nvme2/daten/k2/wissen.jsonl")
+    q.add_argument("--index", default="/mnt/nvme2/daten/k2/wiki_index")
+    q.add_argument("--ziel", default="/mnt/nvme2/daten/k2/grpo1")
+    q.add_argument("--schritte", type=int, default=100)
+    q.add_argument("--je-schritt", type=int, default=16, help="Fragen je Schritt")
+    q.add_argument("--gruppe", type=int, default=8, help="Läufe je Frage")
+    q.add_argument("--lernrate", type=float, default=2e-5)
+    q.add_argument("--rang", type=int, default=16)
+    q.add_argument("--notiz", default="stand", choices=["kompakt", "stand"])
+    q.add_argument("--denkanstoss")
+    q.add_argument("--speichern-alle", type=int, default=20)
+    q.add_argument("--token-budget", type=int, default=96_000)
+    q.add_argument("--seed", type=int, default=0)
 
     g = unter.add_parser("raten", help="Rate-Antworten ohne Suche zu unbekannten Fragen mit gutem Suchlauf")
     g.add_argument("--wissen", default="/mnt/nvme2/daten/k2/wissen.jsonl")
@@ -250,9 +267,23 @@ def main():
             print(f"Adapter eingerechnet: {a.adapter}")
         with open(a.wissen, encoding="utf-8") as f:
             fragen_ = auswahl([json.loads(z) for z in f if z.strip()], a.teil, a.unbekannt)
-        agent = Agent(tok, model, Suche(a.index), aufwand=a.aufwand, notiz=a.notiz)
+        agent = Agent(tok, model, Suche(a.index), aufwand=a.aufwand, notiz=a.notiz,
+                      denkanstoss=a.denkanstoss, token_budget=a.token_budget)
         laeufe_erzeugen(agent, fragen_, a.ziel, hinweis=False, stapel=a.stapel)
         print(auswerten(laeufe_laden(a.ziel)))
+
+    elif a.befehl == "grpo":
+        import json
+
+        from .grpo import trainieren_grpo
+        from .suche import Suche
+
+        with open(a.wissen, encoding="utf-8") as f:
+            fragen_ = [z for z in (json.loads(x) for x in f if x.strip()) if z["teil"] == "train"]
+        print(f"{len(fragen_)} Trainingsfragen", flush=True)
+        trainieren_grpo(tok, model, Suche(a.index), fragen_, a.ziel, a.schritte, a.je_schritt, a.gruppe,
+                        a.lernrate, a.rang, a.notiz, a.denkanstoss, a.speichern_alle, a.token_budget,
+                        seed=a.seed)
 
     elif a.befehl == "trainieren":
         from .training import trainieren
