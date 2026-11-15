@@ -1,0 +1,4 @@
+# Für den Denkkern. Die RTX 5080 (Blackwell) braucht PyTorch mit CUDA 12.8 oder neuer.
+--extra-index-url https://download.pytorch.org/whl/cu128
+torch>=2.7
+pytest

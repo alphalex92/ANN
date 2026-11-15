@@ -102,3 +102,135 @@ Nach 20 Epochen liegt das Netz bei etwa **92 %** auf den Testdaten (in ~3 Sekund
 - Statt 64 Bits die 8 Bytes als Zahlen 0–1 eingeben: Lernt das Netz dann besser oder schlechter?
 - Echte Bytes aus einem Spiel mit dem [Trainer](https://github.com/alphalex92/Trainer) auslesen
   und raten lassen.
+
+## Projekt: Denkkern
+
+Ein kleines GPT mit **Schleife**, das Wissen **nachschlagen** muss, statt es zu kennen. Die
+Frage dahinter: Lässt sich „suchen und Treffer verknüpfen“ als eigene Fähigkeit lernen, wenn
+das Modell von Anfang an nichts auswendig wissen *kann*? Bei K2 Horizon hängt es genau
+daran: Das Modell sucht, wertet die Treffer aber oft nicht aus.
+
+### Die Spielwelt
+
+Jede Episode würfelt eine neue Welt aus: 64 Dinge (`e0` … `e63`) und 8 Beziehungen
+(`r0` … `r7`), jede Beziehung eine Zufallsfunktion. Eine Frage ist eine Kette, `? e12 r5 r4 r7`
+heißt „r7 von r4 von r5 von e12“. Weil die Welt immer neu ist, hilft Auswendiglernen nichts.
+
+| Modus | Was das Modell sieht | Was es schreibt |
+|---|---|---|
+| `werkzeug` | nur die Frage | `S e12 r5` → Umgebung: `= e60`, … , am Ende `A e3 </s>` |
+| `restkette` | wie werkzeug, aber jeder Treffer nennt die offenen Glieder | `S e12 r5` → `= e60 \| r4 r7`, … , `= e3 \|` → `A e3 </s>` |
+| `kompakt` | nach jedem Treffer nur einen frischen Notizzettel: Frage, Stand, Restkette | `<s> ? e12 r5 r4 = e57 \| r4` → `S e57 r4` |
+| `kontext` | 16 Fakten (Kette plus Ablenker), dann die Frage | sofort `A e3 </s>`, die Kette muss *in den Schichten* laufen |
+
+Gelernt wird nur, was das Modell selbst schreibt. Frage, Fakten und Treffer sind Kontext.
+
+### Das Modell
+
+`vorne` → `Kern` × Schleifen → `hinten`. Der Kern hat seine Gewichte nur einmal, läuft aber
+mehrfach. Vor jedem Durchlauf wird die Eingabe neu eingespeist. Trainiert wird mit zufällig
+vielen Durchläufen, gemessen mit mehr als im Training. Positionen über RoPE oder gar keine
+(NoPE), damit längere Ketten nicht schon an den Positions-Einbettungen scheitern.
+
+### Schnellstart
+
+```bash
+pip install -r requirements-denkkern.txt
+```
+
+```bash
+python -m denkkern beispiel --modus werkzeug --hops 3
+```
+
+```bash
+python -m denkkern trainieren --modus werkzeug --name w1 --hops 1-4 --schleifen 1-4 --minuten 5
+```
+
+```bash
+python -m denkkern messen --name w1 --hops 1-12 --schleifen 1,2,4,8
+```
+
+Die Messung rollt das Modell frei aus, die Umgebung beantwortet seine Suchen. Im Modus
+`werkzeug` gibt es dieselben Kategorien wie bei K2: richtig, gesucht aber falsch, geraten
+(geantwortet, ohne genug gesucht zu haben) und abgebrochen. Dazu „Suchweg exakt“: jede Suche
+war genau die nächste nötige. Läufe landen in `laeufe/<name>/`.
+
+### Erster Lauf (6–10 Minuten je Modell, 3,3 M Parameter, RTX 5080)
+
+Trainiert auf Ketten mit 1–4 Hops, gemessen bis 12 Hops, je 500 Fragen. Die Zahlen gelten
+bei 4 Schleifen, bei kontext bei 6.
+
+| Hops | werkzeug, RoPE | werkzeug, NoPE | kontext, RoPE |
+|---|---|---|---|
+| 1–4 | 100 % | 100 % | 88 / 41 / 19 / 13 % |
+| 5 (neu) | 5 % | 77 % (87 % bei 8 Schleifen) | 10 % |
+| 6–12 (neu) | 0–3 % | 0–3 % | 0–2 % |
+
+- **Im Trainingsbereich ist das Werkzeug perfekt gelernt.** Der Suchweg ist zu 100 % exakt,
+  obwohl die Welt jedes Mal neu ist. Nachschlagen und Treffer verketten klappt also.
+- **Darüber hinaus antwortet das Modell zu früh.** Es hat „nach höchstens 4 Suchen
+  antworten“ gelernt statt „antworten, wenn die Kette abgearbeitet ist“. Das zählt als
+  geraten, bei NoPE und 6–9 Hops zu 96–98 %. Ganz lange Ketten brechen ab.
+- **Ohne Positionen (NoPE) verallgemeinert es besser als mit RoPE**, auf 5 Hops 77 % statt 5 %.
+  Mehr Schleifen helfen dort etwas, 87 % bei 8 statt 77 % bei 4.
+- **Im Modus kontext lernt das Modell in 10 Minuten nur 1 Hop richtig** (88 %). Die
+  Schleifen bringen nichts: Mit 1 Durchlauf ist es so gut wie mit 12. Der Verlust fiel
+  am Ende noch, das Modell ist also untertrainiert.
+
+### Zweiter Lauf: Werkzeug mit Restkette
+
+Die Umgebung hängt an jeden Treffer, welche Glieder der Kette noch offen sind. Gestrichen
+wird ein Glied nur, wenn das Modell genau die nötige Suche gemacht hat. Wieder 6 Minuten,
+Hops 1–4 im Training. Richtig in %:
+
+| Hops | werkzeug, NoPE | restkette, NoPE, 1 Schl. | restkette, NoPE, 4 Schl. | restkette, RoPE |
+|---|---|---|---|---|
+| 1–4 | 100 | 100 | 100 | 100 |
+| 5 (neu) | 77 | 100 | **100** | 0 |
+| 6 (neu) | 3 | 52 | **99** | 0 |
+| 7 (neu) | 3 | 5 | **74** | 0 |
+| 8 (neu) | 3 | 0 | 25 | 0 |
+| 9–12 (neu) | 0–2 | 0 | 0–2 | 0 |
+
+- **Das Raten ist komplett weg**, bei allen Hops 0 %. Die Umgebung sagt, wann die Kette
+  fertig ist, und daran hält sich das Modell.
+- **Hier helfen die Schleifen zum ersten Mal deutlich.** Mit 4 statt 1 Durchlauf löst das
+  Modell 6er-Ketten zu 99 % statt 52 % und 7er-Ketten zu 74 % statt 5 %.
+- **RoPE scheitert sofort** an jeder Kette, die länger ist als im Training.
+- **Wo es noch bricht:** Ab etwa 7 Hops nimmt das Modell nicht mehr das erste offene Glied
+  hinter „|“, sondern wiederholt meist die Beziehung der letzten Suche. Weil die Restkette
+  dann stehen bleibt, sucht es im Kreis, bis die Schritte ausgehen (abgebrochen). Lange
+  Verläufe mit vielen ähnlichen „| …“-Stücken verwirren es also, die Länge der Restkette
+  selbst weniger.
+
+### Dritter Lauf: kompakter Verlauf
+
+Statt den ganzen Verlauf zu behalten, bekommt das Modell nach jedem Treffer einen frischen
+Notizzettel mit der Frage, dem aktuellen Stand und der Restkette. Wieder 6 Minuten, Hops 1–4
+im Training, gemessen bis 16 Hops. Richtig in %:
+
+| Hops | restkette, NoPE, 4 Schl. | **kompakt, NoPE**, 1 Schl. | **kompakt, NoPE**, 4 Schl. | kompakt, RoPE |
+|---|---|---|---|---|
+| 1–4 | 100 | 100 | 100 | 100 |
+| 5–6 (neu) | 99–100 | 100 | 100 | 0–1 |
+| 7–8 (neu) | 25–74 | 100 | 100 | 0 |
+| 9–15 (neu) | 0–2 | 100 | 100 | 0 |
+| 16 (neu) | – | 98 | **100** | 0 |
+
+- **Mit Notizzettel und ohne Positionsangaben löst das Modell Ketten viermal so lang wie im
+  Training fehlerfrei.** Der Suchweg ist jedes Mal exakt, geraten und abgebrochen sind 0 %.
+- **Die Schleifen braucht es dafür kaum noch.** Mit 1 Durchlauf sind es bei 16 Hops 98 %,
+  mit 4 Durchläufen 100 %. Jeder Schritt ist so einfach geworden, dass ein Durchlauf reicht.
+- **RoPE scheitert auch hier** ab der ersten neuen Länge. Die Frage auf dem Zettel ist länger
+  als im Training, und schon das wirft RoPE aus der Bahn.
+
+**Was das heißt:** Das Modell hat in allen drei Werkzeug-Varianten dieselbe Fähigkeit
+gelernt: suchen und den Treffer weiterverwenden. Gescheitert ist es jedes Mal an der
+*Buchführung*, also daran, mitzuzählen, wann es fertig ist, und in einem langen Verlauf den
+Faden zu behalten. Legt man die Buchführung in die Umgebung, verallgemeinert schon ein
+3-M-Modell nach 6 Minuten auf beliebig lange Ketten. Für K2 hieße das: die Recherche über
+einen kurzen Notizzettel führen, statt über den wachsenden Verlauf.
+
+Einschränkung: In dieser Spielwelt ist jeder einzelne Schritt leicht. Wie gut sich das auf
+echte Fragen überträgt, bei denen schon das Lesen eines Treffers schwer ist, zeigt erst ein
+Versuch mit K2.
