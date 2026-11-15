@@ -271,3 +271,44 @@ richtig beantwortet. Mittlerer Denkaufwand, höchstens 3 Suchen, etwa 2,5 Stunde
 Bei 390 dieser 645 Abbrüche stand die Antwort schon in den Treffern. Das Modell übersieht sie
 oder traut ihnen nicht. Unter den gewussten Beispielen sind 220 von 285 Hauptstädte, deshalb
 wird nach Fragetyp getrennt ausgewertet.
+
+#### Notizzettel statt ganzem Verlauf
+
+Idee aus dem Denkkern-Prototyp (Branch `denkkern`): Dort scheiterte das Modell nicht am Suchen,
+sondern an der Buchführung. Mit einem kompakten Notizzettel statt des wachsenden Verlaufs löste
+es Ketten weit über die Trainingslänge hinaus. Bei K2 ist der Verlauf kurz (etwa 2.000 Tokens),
+aber in den Gedanken früherer Züge stehen Zweifel wie „vielleicht doch nicht Istanbul?“, die
+sich von Suche zu Suche verstärken.
+
+```bash
+python -m k2_horizon messen --notiz stand --ziel /mnt/nvme2/daten/k2/messung_notiz_stand.jsonl
+```
+
+`agent.ansicht` ändert nur, was das Modell sieht. Gespeichert wird weiter das ganze Gespräch.
+
+- `kompakt`: Die Gedanken früherer Züge fallen weg. Von früheren Suchen bleiben die Anfrage und
+  die Titel der Treffer, nur die neuesten Treffer stehen vollständig da.
+- `stand`: wie kompakt, dazu unter den Treffern „Searches used: 2 of 3. 1 left.“ und bei 0
+  „No searches left: answer now from the passages.“
+
+Ohne jedes Training, dieselben 300 Validierungsfragen:
+
+| | Basis | kompakt | stand | Fortsetzen 2 | **Fortsetzen 2 + stand** |
+|---|---|---|---|---|---|
+| unbekannt: gesucht und richtig | 48 % | 52 % | 50 % | 52 % | **57 %** |
+| unbekannt: abgebrochen | 29 % | 20 % | 17 % | 18 % | **4 %** |
+| unbekannt: gesucht, aber falsch | 16 % | 22 % | 27 % | 22 % | 34 % |
+| unbekannt: geraten | 6 % | 6 % | 3 % | 6 % | 2 % |
+| **gesamt richtig** | 62 % | **67 %** | **67 %** | 66 % | **69 %** |
+| Suchen je Frage | 1,45 | 1,31 | 1,34 | 1,23 | 1,12 |
+
+- **Der Notizzettel allein bringt so viel wie das ganze bisherige Training**, 62 → 67 %.
+- **Zusammen mit Fortsetzen 2 fallen die Abbrüche fast ganz weg**, von 29 % auf 4 %. Insgesamt
+  69 % richtig, das beste Ergebnis bisher.
+- **Aus Abbrüchen werden jetzt teils falsche Antworten.** Von den 74 Fällen „gesucht, aber falsch“
+  stand bei 41 die Lösung gar nicht in den Treffern: Da muss die Suche besser werden. Bei den
+  übrigen sind viele Fragen mehrdeutig („Who was the producer of The Message?“) oder die
+  PopQA-Lösung passt nicht recht („Denmark“ als Geburtsstadt).
+- Die gewussten Fragen (54) schwanken zwischen den Läufen um bis zu 10 Punkte, obwohl der erste
+  Zug in allen Varianten gleich ist. Das ist Zufall beim Erzeugen (Temperatur 1,0), kein Effekt
+  des Notizzettels.

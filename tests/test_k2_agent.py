@@ -125,3 +125,43 @@ def test_such_beispiele_je_frage_einer():
     s = such_beispiele(laeufe, 10)
     assert sorted(b["id"].split("#")[0] for b in s) == ["1", "2"]
     assert all("lernen_ab" not in b for b in s)
+
+
+def _gespraech_mit_zwei_suchen():
+    from k2_horizon.agent import WERKZEUG  # noqa: F401  (nur damit der Import geprüft ist)
+    return [
+        {"role": "user", "content": "In what city was X born? Answer briefly."},
+        {"role": "assistant", "think_fast": "Need to search.", "content": "",
+         "tool_calls": [{"type": "function", "function": {"name": "suche", "arguments": {"anfrage": "X born"}}}]},
+        {"role": "tool", "name": "suche", "content": "[1] X\nX was born in Paris.\n\n[2] Y\nOther text."},
+        {"role": "assistant", "think_fast": "Maybe not Paris? Search again.", "content": "",
+         "tool_calls": [{"type": "function", "function": {"name": "suche", "arguments": {"anfrage": "X birthplace"}}}]},
+        {"role": "tool", "name": "suche", "content": "[1] X\nX was born in Paris, France."},
+    ]
+
+
+def test_ansicht_ohne_notiz_unveraendert():
+    from k2_horizon.agent import ansicht
+    g = _gespraech_mit_zwei_suchen()
+    assert ansicht(g, None, 3) is g
+
+
+def test_ansicht_kompakt():
+    from k2_horizon.agent import ansicht
+    g = _gespraech_mit_zwei_suchen()
+    v = ansicht(g, "kompakt", 3)
+    assert len(v) == len(g)
+    assert all(m["think_fast"] == "" for m in v if m["role"] == "assistant")
+    assert v[1]["tool_calls"] == g[1]["tool_calls"]  # die Anfragen bleiben sichtbar
+    assert v[2]["content"] == "(Already read, shown in short: [1] X; [2] Y)"
+    assert v[4]["content"] == g[4]["content"]  # neueste Treffer vollständig
+    assert g[1]["think_fast"] == "Need to search."  # das Original bleibt unverändert
+
+
+def test_ansicht_stand_zaehlt_die_suchen():
+    from k2_horizon.agent import ansicht
+    g = _gespraech_mit_zwei_suchen()
+    assert ansicht(g, "stand", 3)[-1]["content"].endswith("Searches used: 2 of 3. 1 left.")
+    assert ansicht(g, "stand", 2)[-1]["content"].endswith("No searches left: answer now from the passages.")
+    nur_frage = g[:1]
+    assert ansicht(nur_frage, "stand", 3) == nur_frage

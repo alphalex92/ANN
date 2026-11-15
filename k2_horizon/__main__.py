@@ -66,6 +66,7 @@ def main():
     v.add_argument("--aufwand", default="medium", choices=["low", "medium", "high"])
     v.add_argument("--stapel", type=int, default=16)
     v.add_argument("--nur-auswertung", action="store_true")
+    v.add_argument("--notiz", choices=["kompakt", "stand"], help="Notizzettel statt ganzem Verlauf, siehe agent.ansicht")
 
     r = unter.add_parser("trainieren", help="LoRA-Training auf den ausgewählten Lösungswegen")
     r.add_argument("--daten", default="/mnt/nvme2/daten/k2/sft_train.jsonl")
@@ -249,7 +250,7 @@ def main():
             print(f"Adapter eingerechnet: {a.adapter}")
         with open(a.wissen, encoding="utf-8") as f:
             fragen_ = auswahl([json.loads(z) for z in f if z.strip()], a.teil, a.unbekannt)
-        agent = Agent(tok, model, Suche(a.index), aufwand=a.aufwand)
+        agent = Agent(tok, model, Suche(a.index), aufwand=a.aufwand, notiz=a.notiz)
         laeufe_erzeugen(agent, fragen_, a.ziel, hinweis=False, stapel=a.stapel)
         print(auswerten(laeufe_laden(a.ziel)))
 

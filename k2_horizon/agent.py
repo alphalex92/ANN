@@ -69,6 +69,44 @@ def zerlegen(roh, aufwand):
     return nachricht
 
 
+NOTIZ_ARTEN = ("kompakt", "stand")
+_TITEL = re.compile(r"^\[(\d+)\] (.+)$", re.M)
+
+
+def ansicht(gespraech, notiz, max_suchen):
+    """Was das Modell vom Gespräch zu sehen bekommt. Gespeichert wird immer das ganze Gespräch.
+
+    Wie der Notizzettel im Denkkern: Statt des wachsenden Verlaufs sieht das Modell nur, was es
+    für den nächsten Schritt braucht.
+
+    kompakt  Die Gedanken früherer Züge fallen weg (dort stehen oft Zweifel wie „vielleicht
+             doch nicht?“, die sich von Zug zu Zug verstärken). Von früheren Suchen bleiben die
+             Anfrage und die Titel der Treffer, nur die neuesten Treffer stehen vollständig da.
+    stand    wie kompakt, dazu unter den neuesten Treffern der Stand der Suchen: wie viele
+             verbraucht sind und wie viele noch übrig. Das ist das Gegenstück zur Restkette.
+    """
+    if notiz is None:
+        return gespraech
+    if notiz not in NOTIZ_ARTEN:
+        raise ValueError(f"notiz muss eines von {NOTIZ_ARTEN} sein")
+    letzter_zug = max((i for i, m in enumerate(gespraech) if m["role"] == "assistant"), default=-1)
+    neu = []
+    for i, m in enumerate(gespraech):
+        if m["role"] == "assistant":
+            m = {k: ("" if k in DENK_FELD.values() else v) for k, v in m.items()}
+        elif m["role"] == "tool" and i < letzter_zug:
+            titel = "; ".join(f"[{n}] {x}" for n, x in _TITEL.findall(m["content"]))
+            m = {**m, "content": f"(Already read, shown in short: {titel or 'no results'})"}
+        neu.append(m)
+    suchen = sum(m["role"] == "tool" for m in gespraech)
+    if notiz == "stand" and neu and neu[-1]["role"] == "tool":
+        rest = max(0, max_suchen - suchen)
+        zeile = f"Searches used: {suchen} of {max_suchen}."
+        zeile += f" {rest} left." if rest else " No searches left: answer now from the passages."
+        neu[-1] = {**neu[-1], "content": neu[-1]["content"] + "\n\n" + zeile}
+    return neu
+
+
 def gedanken_von(nachricht):
     for feld in DENK_FELD.values():
         if feld in nachricht:
@@ -77,16 +115,20 @@ def gedanken_von(nachricht):
 
 
 class Agent:
-    def __init__(self, tok, model, suche, aufwand="medium", max_suchen=3, max_neu=1024, ohne_suche=False):
+    def __init__(self, tok, model, suche, aufwand="medium", max_suchen=3, max_neu=1024, ohne_suche=False,
+                 notiz=None):
         """ohne_suche: Das Werkzeug steht im Prompt, aber die Tokens für einen Aufruf sind gesperrt.
-        So entstehen die Antworten, die das Modell gibt, wenn es rät, mit demselben Prompt wie sonst."""
+        So entstehen die Antworten, die das Modell gibt, wenn es rät, mit demselben Prompt wie sonst.
+        notiz: None, "kompakt" oder "stand", siehe `ansicht`."""
         self.tok, self.model, self.suche = tok, model, suche
         self.aufwand, self.max_suchen, self.max_neu = aufwand, max_suchen, max_neu
+        self.notiz = notiz
         self.gesperrt = [tok.convert_tokens_to_ids(t) for t in ("<ifm|tool_calls>", "<ifm|tool_call>")] if ohne_suche else None
         tok.padding_side = "left"
 
     def _prompt(self, gespraech, hinweis):
-        nachrichten = ([{"role": "system", "content": HINWEIS}] if hinweis else []) + gespraech
+        nachrichten = (([{"role": "system", "content": HINWEIS}] if hinweis else [])
+                       + ansicht(gespraech, self.notiz, self.max_suchen))
         return self.tok.apply_chat_template(
             nachrichten, tools=[WERKZEUG], add_generation_prompt=True, tokenize=False,
             reasoning_effort=self.aufwand,
