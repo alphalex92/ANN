@@ -1,10 +1,10 @@
 import numpy as np
 import torch
 
-from denkkern.agent import Agent
-from denkkern.gedaechtnis import HopfieldGedaechtnis
-from denkkern.modell import DenkModell, verlust
-from denkkern.sudoku import (anzahl_loesungen, datensatz, denktiefe, gueltig_batch, ist_gueltige_loesung,
+from mini_kortex.agent import Agent
+from mini_kortex.gedaechtnis import HopfieldGedaechtnis
+from mini_kortex.modell import DenkModell, verlust
+from mini_kortex.sudoku import (anzahl_loesungen, datensatz, denktiefe, gueltig_batch, ist_gueltige_loesung,
                              regelverstoesse, zufaelliges_gitter)
 
 

@@ -1,4 +1,4 @@
-"""Kommandozeile: python -m denkkern trainieren | auswerten | loesen | beispiele"""
+"""Kommandozeile: python -m mini_kortex trainieren | auswerten | loesen | beispiele"""
 
 import argparse
 import json
@@ -12,12 +12,12 @@ from .agent import Agent
 from .sudoku import als_text, datensatz, gueltig_batch
 from .training import daten_laden, genauigkeit_pro_schritt, laden, speichern, trainieren
 
-MODELL = Path("denkkern.pt")
+MODELL = Path("mini_kortex.pt")
 
 
 def _modell():
     if not MODELL.exists():
-        sys.exit(f"{MODELL} fehlt – erst `python -m denkkern trainieren` ausführen")
+        sys.exit(f"{MODELL} fehlt – erst `python -m mini_kortex trainieren` ausführen")
     return laden(MODELL)
 
 
@@ -135,10 +135,10 @@ def befehl_beispiele(args):
 
 
 def main():
-    p = argparse.ArgumentParser(prog="python -m denkkern", description=__doc__)
+    p = argparse.ArgumentParser(prog="python -m mini_kortex", description=__doc__)
     sub = p.add_subparsers(dest="befehl", required=True)
 
-    t = sub.add_parser("trainieren", help="Modell trainieren und als denkkern.pt speichern")
+    t = sub.add_parser("trainieren", help="Modell trainieren und als mini_kortex.pt speichern")
     t.add_argument("--laeufe", type=int, default=3000, help="Anzahl Trainings-Batches")
     t.add_argument("--schritte", type=int, default=8, help="Denkschritte pro Rätsel beim Training")
     t.add_argument("--d", type=int, default=64, help="Breite der Vektoren im Arbeitsraum")
