@@ -54,18 +54,18 @@ pip install -r requirements.txt
 ```
 
 ```bash
-python -m mini_kortex trainieren
+python -m mini_kortex --groesse 6 trainieren
 ```
 
 Das dauert auf 4 CPU-Kernen etwa eine halbe Stunde. Beim ersten Mal werden zusätzlich die Rätsel
-erzeugt (etwa 1 Minute) und als `daten_sudoku6.npz` abgelegt, das Modell landet in `mini_kortex.pt`.
+erzeugt (etwa 1 Minute) und als `daten_sudoku6.npz` abgelegt, das Modell landet in `mini_kortex_6.pt`. Die Ergebnisse unten gelten für 6×6; 9×9 und Konsolidierung sind in Arbeit.
 
 ```bash
-python -m mini_kortex auswerten
+python -m mini_kortex --groesse 6 auswerten
 ```
 
 ```bash
-python -m mini_kortex loesen --leer 26
+python -m mini_kortex --groesse 6 loesen --leer 26
 ```
 
 `loesen` erzeugt ein neues Rätsel und zeigt nach jedem Denkschritt, wie viele Felder noch falsch
@@ -126,7 +126,7 @@ Denkschritte braucht es, und mit 16 Schritten löst es **alle** Testrätsel. Die
 zeigt, dass die Metakognition das selbst merkt: Bei leichten Rätseln hört sie nach einem Schritt
 auf, bei den schwersten denkt sie im Schnitt dreimal so lange nach.
 
-So sieht das bei einem schweren Rätsel aus (`python -m mini_kortex loesen --leer 28 --seed 71`):
+So sieht das bei einem schweren Rätsel aus (`python -m mini_kortex --groesse 6 loesen --leer 28 --seed 71`):
 
 ```
 Denkschritt  1:  7 Felder falsch · Zuversicht 13% · Regelprüfer: ungültig

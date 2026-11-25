@@ -110,7 +110,7 @@ class Agent:
         # Lernen: jede vom Werkzeug bestätigte, neu erdachte Lösung sofort speichern.
         if self.gedaechtnis is not None:
             for i in np.flatnonzero(geprueft & ~aus_gedaechtnis):
-                self.gedaechtnis.speichern(raetsel[i], antwort[i])
+                self.gedaechtnis.speichern(raetsel[i], antwort[i], schritte[i])
 
         richtig = (antwort == loesung).all(1) if loesung is not None else gueltig_batch(antwort, raetsel)
         quelle = np.where(aus_gedaechtnis, "gedaechtnis", "denken")

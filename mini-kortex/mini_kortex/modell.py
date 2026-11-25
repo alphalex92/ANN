@@ -5,7 +5,8 @@ wird immer wieder auf seinen eigenen Zustand angewendet. Statt 100 Schichten hin
 gibt es 2 Schichten, die man 100-mal durchläuft. Die "Tiefe" des Denkens kostet so
 Rechenzeit, aber keine zusätzlichen Parameter.
 
-Der gemeinsame **Arbeitsraum** besteht aus drei Tensoren der Form (Batch, 36 Felder, d):
+Der gemeinsame **Arbeitsraum** besteht aus drei Tensoren der Form (Batch, Felder, d),
+bei 6×6 also 36 Felder, bei 9×9 sind es 81:
 
     x  – was die Wahrnehmung sieht (das Rätsel, bleibt fest)
     z  – ein latenter Gedanke (Zwischenschritte, nie direkt als Antwort sichtbar)
@@ -18,20 +19,16 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .sudoku import N
-
-FELDER = N * N
-
 
 class MixerBlock(nn.Module):
     """Ein MLP-Mixer-Block: erst Information zwischen Feldern austauschen, dann pro Feld rechnen.
 
     Für Sudoku ist das passend: Welche Felder sich gegenseitig beeinflussen (Zeile, Spalte,
-    Kasten), ist immer gleich. Ein festes, gelerntes Mischen der 36 Felder reicht dafür aus,
+    Kasten), ist immer gleich. Ein festes, gelerntes Mischen der Felder reicht dafür aus,
     Attention braucht es nicht. TRM hat auf Sudoku mit dieser Variante am besten abgeschnitten.
     """
 
-    def __init__(self, d, felder=FELDER):
+    def __init__(self, d, felder):
         super().__init__()
         self.norm1 = nn.LayerNorm(d)
         self.feld_mix = nn.Sequential(nn.Linear(felder, 2 * felder), nn.GELU(), nn.Linear(2 * felder, felder))
@@ -44,12 +41,12 @@ class MixerBlock(nn.Module):
 
 
 class Wahrnehmung(nn.Module):
-    """Rätsel (Ziffern 0–6 pro Feld) → Vektor pro Feld. 0 = leer bekommt einen eigenen Vektor."""
+    """Rätsel (Ziffern 0–n pro Feld) → Vektor pro Feld. 0 = leer bekommt einen eigenen Vektor."""
 
-    def __init__(self, d):
+    def __init__(self, d, n):
         super().__init__()
-        self.ziffer = nn.Embedding(N + 1, d)
-        self.position = nn.Parameter(torch.randn(FELDER, d) * 0.02)
+        self.ziffer = nn.Embedding(n + 1, d)
+        self.position = nn.Parameter(torch.randn(n * n, d) * 0.02)
 
     def forward(self, raetsel):
         return self.ziffer(raetsel) + self.position
@@ -65,9 +62,10 @@ class Denkkern(nn.Module):
     Wenn x fehlt, aktualisiert es die Antwort.
     """
 
-    def __init__(self, d, schichten=2, innere=3):
+    def __init__(self, d, felder, schichten=2, innere=3):
         super().__init__()
-        self.f = nn.Sequential(*[MixerBlock(d) for _ in range(schichten)])
+        self.f = nn.Sequential(*[MixerBlock(d, felder) for _ in range(schichten)])
+        self.felder = felder
         self.norm = nn.LayerNorm(d)
         self.innere = innere
         self.y_start = nn.Parameter(torch.randn(d) * 0.02)
@@ -75,7 +73,7 @@ class Denkkern(nn.Module):
 
     def anfang(self, x):
         b = x.shape[0]
-        return self.y_start.expand(b, FELDER, -1), self.z_start.expand(b, FELDER, -1)
+        return self.y_start.expand(b, self.felder, -1), self.z_start.expand(b, self.felder, -1)
 
     def denkschritt(self, x, y, z):
         for _ in range(self.innere):
@@ -106,16 +104,17 @@ class DenkModell(nn.Module):
     """Alle neuronalen Teile zusammen. Die Steuerung (wann aufhören, Gedächtnis, Werkzeug)
     liegt in `agent.py`, damit man sie getrennt ein- und ausschalten kann."""
 
-    def __init__(self, d=64, schichten=2, innere=3):
+    def __init__(self, n=6, d=64, schichten=2, innere=3):
         super().__init__()
-        self.konfig = dict(d=d, schichten=schichten, innere=innere)
-        self.wahrnehmung = Wahrnehmung(d)
-        self.kern = Denkkern(d, schichten, innere)
-        self.ausgabe = nn.Linear(d, N)  # pro Feld: Rohwerte für die Ziffern 1–6
+        self.n = n
+        self.konfig = dict(n=n, d=d, schichten=schichten, innere=innere)
+        self.wahrnehmung = Wahrnehmung(d, n)
+        self.kern = Denkkern(d, n * n, schichten, innere)
+        self.ausgabe = nn.Linear(d, n)  # pro Feld: Rohwerte für die Ziffern 1–n
         self.metakognition = Metakognition(d)
 
     def ablesen(self, raetsel, y):
-        """Antwort-Entwurf → Ziffern 1–6. Vorgegebene Ziffern werden nie überschrieben."""
+        """Antwort-Entwurf → Ziffern 1–n. Vorgegebene Ziffern werden nie überschrieben."""
         geraten = self.ausgabe(y).argmax(-1) + 1
         return torch.where(raetsel > 0, raetsel, geraten)
 

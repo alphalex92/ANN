@@ -91,3 +91,52 @@ def test_training_senkt_den_verlust():
             teil.backward()
             opt.step()
     assert gesamt() < 0.8 * vorher
+
+
+def test_9x9_raetsel_sind_eindeutig():
+    raetsel, loesungen, tiefe = datensatz(5, np.random.default_rng(8), n=9)
+    assert raetsel.shape == (5, 81)
+    for r, l in zip(raetsel, loesungen):
+        assert anzahl_loesungen(r) == 1 and ist_gueltige_loesung(l, r)
+
+
+def test_symmetrie_varianten_bleiben_gueltig_und_gleich_schwer():
+    from mini_kortex.sudoku import varianten
+    for n in (6, 9):
+        raetsel, loesungen, tiefe = datensatz(5, np.random.default_rng(9), n=n)
+        vr, vl = varianten(raetsel, loesungen, np.random.default_rng(10))
+        assert gueltig_batch(vl, vr).all()
+        assert ((vr == 0).sum(1) == (raetsel == 0).sum(1)).all()
+        assert [denktiefe(r) for r in vr] == tiefe.tolist()
+        assert not np.array_equal(vr, raetsel)
+
+
+def test_9x9_modell_und_agent_laufen():
+    torch.manual_seed(0)
+    raetsel, loesungen, _ = datensatz(6, np.random.default_rng(11), n=9)
+    e = Agent(DenkModell(n=9, d=16), max_schritte=2).loesen(raetsel, loesungen)
+    assert e.antwort.shape == (6, 81)
+    assert not np.any(e.geprueft & ~e.richtig)
+
+
+def test_gedaechtnis_merkt_sich_die_denkschritte():
+    raetsel, loesungen, _ = datensatz(3, np.random.default_rng(12))
+    g = HopfieldGedaechtnis()
+    for r, l, s in zip(raetsel, loesungen, [1, 5, 9]):
+        g.speichern(r, l, s)
+    r, l, s = g.episoden(mindestens_schritte=5)
+    assert s.tolist() == [5, 9] and np.array_equal(r, raetsel[1:]) and np.array_equal(l, loesungen[1:])
+
+
+def test_schlaf_trainiert_eine_kopie_auf_eigenen_episoden():
+    from mini_kortex.konsolidierung import schlafen
+    torch.manual_seed(0)
+    raetsel, loesungen, _ = datensatz(8, np.random.default_rng(13))
+    modell = DenkModell(d=16)
+    vorher = {k: v.clone() for k, v in modell.state_dict().items()}
+    g = HopfieldGedaechtnis()
+    for r, l in zip(raetsel, loesungen):
+        g.speichern(r, l, 3)
+    neu = schlafen(modell, g, alte=(raetsel, loesungen), laeufe=3, batch=8, schritte=2, protokoll=lambda *_: None)
+    assert all(torch.equal(v, modell.state_dict()[k]) for k, v in vorher.items())  # Original unverändert
+    assert any(not torch.equal(v, neu.state_dict()[k]) for k, v in vorher.items())  # Kopie hat gelernt

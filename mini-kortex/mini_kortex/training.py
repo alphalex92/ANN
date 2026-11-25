@@ -8,23 +8,29 @@ import numpy as np
 import torch
 
 from .modell import DenkModell, verlust
-from .sudoku import datensatz
-
-DATEN = Path("daten_sudoku6.npz")
+from .sudoku import datensatz, varianten
 
 
-def daten_laden(anzahl_training, anzahl_test, seed=0):
-    """Erzeugt die Rätsel einmal und legt sie als Datei ab. Danach geht das Laden sofort."""
-    if DATEN.exists():
-        d = np.load(DATEN)
+def datenpfad(n):
+    return Path(f"daten_sudoku{n}.npz")
+
+
+def daten_laden(n, anzahl_training, anzahl_test, seed=0, prozesse=4, protokoll=print):
+    """Erzeugt die Rätsel einmal und legt sie als Datei ab. Danach geht das Laden sofort.
+
+    Rückgabe: (training, test), jeweils (raetsel, loesungen, tiefe).
+    """
+    pfad = datenpfad(n)
+    if pfad.exists():
+        d = np.load(pfad)
         if len(d["tr_r"]) >= anzahl_training and len(d["te_r"]) >= anzahl_test:
             return ((d["tr_r"][:anzahl_training], d["tr_l"][:anzahl_training], d["tr_t"][:anzahl_training]),
                     (d["te_r"][:anzahl_test], d["te_l"][:anzahl_test], d["te_t"][:anzahl_test]))
-    print(f"Erzeuge {anzahl_training} + {anzahl_test} Rätsel (einmalig) …")
+    protokoll(f"Erzeuge {anzahl_training} + {anzahl_test} Rätsel ({n}×{n}, einmalig) …")
     # Getrennte Zufallsströme: Die Testrätsel sind dieselben, egal wie viele Trainingsrätsel es gibt.
-    tr = datensatz(anzahl_training, np.random.default_rng(seed))
-    te = datensatz(anzahl_test, np.random.default_rng(seed + 1_000_000))
-    np.savez_compressed(DATEN, tr_r=tr[0], tr_l=tr[1], tr_t=tr[2], te_r=te[0], te_l=te[1], te_t=te[2])
+    tr = datensatz(anzahl_training, np.random.default_rng(seed), n=n, prozesse=prozesse)
+    te = datensatz(anzahl_test, np.random.default_rng(seed + 1_000_000), n=n, prozesse=prozesse)
+    np.savez_compressed(pfad, tr_r=tr[0], tr_l=tr[1], tr_t=tr[2], te_r=te[0], te_l=te[1], te_t=te[2])
     return tr, te
 
 
@@ -39,29 +45,45 @@ def genauigkeit_pro_schritt(modell, raetsel, loesung, schritte, batch=500):
         for s, (y, *_rest) in enumerate(modell.denken(r, schritte)):
             treffer[s] += (modell.ablesen(r, y) == l).all(1).sum().item()
     modell.train()
-    return treffer / len(raetsel)
+    return treffer / max(1, len(raetsel))
 
 
-def trainieren(laeufe=4000, batch=128, schritte=8, d=64, innere=3, lernrate=1e-3,
-               anzahl_training=40_000, anzahl_test=2_000, seed=0, protokoll=print):
-    torch.manual_seed(seed)
-    (tr_r, tr_l, _), (te_r, te_l, te_t) = daten_laden(anzahl_training, anzahl_test, seed)
-    modell = DenkModell(d=d, innere=innere)
-    protokoll(f"Modell: {modell.anzahl_parameter():,} Parameter".replace(",", "."))
+def ziehen_aus(raetsel, loesungen, batch, symmetrien=True):
+    """Gibt eine Funktion zurück, die zufällige Batches zieht, auf Wunsch als Symmetrie-Varianten.
+
+    Durch Ziffern umbenennen und Zeilen/Spalten tauschen wird aus jedem Rätsel ein neues,
+    gleich schweres. Das Netz sieht so dasselbe Rätsel praktisch nie zweimal.
+    """
+    def ziehen(rng):
+        idx = rng.integers(0, len(raetsel), batch)
+        r, l = raetsel[idx], loesungen[idx]
+        if symmetrien:
+            r, l = varianten(r, l, rng)
+        return r, l
+    return ziehen
+
+
+def trainingslauf(modell, ziehen, laeufe, schritte=8, lernrate=1e-3, aufwaermen=200, seed=0,
+                  pruefen=None, alle=250, protokoll=print):
+    """Die eigentliche Trainingsschleife. `ziehen(rng)` liefert pro Lauf einen Batch (Rätsel, Lösungen).
+
+    `pruefen(lauf)` darf einen Text zurückgeben, der alle `alle` Läufe ins Protokoll geschrieben wird.
+    """
     opt = torch.optim.AdamW(modell.parameters(), lr=lernrate, weight_decay=0.01)
 
     # Lernrate: kurz hochfahren, dann sanft (Kosinus) absenken.
     def plan(lauf):
-        if lauf < 200:
-            return (lauf + 1) / 200
-        return 0.5 * (1 + math.cos(math.pi * (lauf - 200) / max(1, laeufe - 200)))
+        if lauf < aufwaermen:
+            return (lauf + 1) / aufwaermen
+        return 0.5 * (1 + math.cos(math.pi * (lauf - aufwaermen) / max(1, laeufe - aufwaermen)))
 
     sched = torch.optim.lr_scheduler.LambdaLR(opt, plan)
     rng = np.random.default_rng(seed)
+    modell.train()
     start = time.time()
     for lauf in range(1, laeufe + 1):
-        idx = rng.integers(0, len(tr_r), batch)
-        r, l = torch.as_tensor(tr_r[idx]), torch.as_tensor(tr_l[idx])
+        r, l = ziehen(rng)
+        r, l = torch.as_tensor(r), torch.as_tensor(l)
         letzter = 0.0
         for teil, richtig in verlust(modell, r, l, schritte):
             opt.zero_grad()
@@ -70,22 +92,46 @@ def trainieren(laeufe=4000, batch=128, schritte=8, d=64, innere=3, lernrate=1e-3
             opt.step()
             letzter = richtig
         sched.step()
-        if lauf % 250 == 0 or lauf == laeufe:
-            acc = genauigkeit_pro_schritt(modell, te_r[:500], te_l[:500], schritte)
+        if pruefen and (lauf % alle == 0 or lauf == laeufe):
             protokoll(f"Lauf {lauf:5d}  gelöst (Training, letzter Schritt): {letzter:5.1%}   "
-                      f"Test nach 1/{schritte // 2}/{schritte} Schritten: "
-                      f"{acc[0]:5.1%} / {acc[schritte // 2 - 1]:5.1%} / {acc[-1]:5.1%}   "
-                      f"({time.time() - start:.0f} s)")
+                      f"{pruefen(lauf)}   ({time.time() - start:.0f} s)")
+    modell.eval()
+    return modell
+
+
+def trainieren(n=6, laeufe=3000, batch=128, schritte=8, d=64, innere=3, lernrate=1e-3,
+               anzahl_training=40_000, anzahl_test=2_000, leer_max=None, seed=0, protokoll=print):
+    """Trainiert ein neues Modell. Mit `leer_max` nur auf Rätseln mit höchstens so vielen Leerfeldern."""
+    torch.manual_seed(seed)
+    (tr_r, tr_l, _), (te_r, te_l, te_t) = daten_laden(n, anzahl_training, anzahl_test, seed, protokoll=protokoll)
+    if leer_max is not None:
+        auswahl = (tr_r == 0).sum(1) <= leer_max
+        tr_r, tr_l = tr_r[auswahl], tr_l[auswahl]
+        protokoll(f"Training nur auf Rätseln mit höchstens {leer_max} leeren Feldern: {len(tr_r)} Stück")
+    modell = DenkModell(n=n, d=d, innere=innere)
+    protokoll(f"Modell: {modell.anzahl_parameter():,} Parameter".replace(",", "."))
+
+    def pruefen(_lauf):
+        acc = genauigkeit_pro_schritt(modell, te_r[:500], te_l[:500], schritte)
+        return (f"Test nach 1/{schritte // 2}/{schritte} Schritten: "
+                f"{acc[0]:5.1%} / {acc[schritte // 2 - 1]:5.1%} / {acc[-1]:5.1%}")
+
+    trainingslauf(modell, ziehen_aus(tr_r, tr_l, batch), laeufe, schritte, lernrate, seed=seed,
+                  pruefen=pruefen, protokoll=protokoll)
     return modell, (te_r, te_l, te_t)
 
 
-def speichern(modell, pfad):
-    torch.save({"konfig": modell.konfig, "gewichte": modell.state_dict()}, pfad)
+def speichern(modell, pfad, info=None):
+    """`info`: zusätzliche Angaben zum Training, z. B. auf welchen Rätseln trainiert wurde."""
+    torch.save({"konfig": modell.konfig, "gewichte": modell.state_dict(), "info": info or {}}, pfad)
 
 
-def laden(pfad):
+def laden(pfad, nur_info=False):
     daten = torch.load(pfad, weights_only=True)
-    modell = DenkModell(**daten["konfig"])
+    if nur_info:
+        return daten.get("info", {})
+    konfig = {"n": 6, **daten["konfig"]}  # ältere Modelle kannten nur 6×6
+    modell = DenkModell(**konfig)
     modell.load_state_dict(daten["gewichte"])
     modell.eval()
     return modell

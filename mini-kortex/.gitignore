@@ -1,5 +1,5 @@
 __pycache__/
 *.pyc
 .pytest_cache/
-mini_kortex.pt
-daten_sudoku6.npz
+mini_kortex*.pt
+daten_*.npz
