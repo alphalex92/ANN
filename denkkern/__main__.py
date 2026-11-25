@@ -66,7 +66,7 @@ def befehl_auswerten(args):
         ("+ Werkzeug (Regelprüfer)", dict(metakognition=True, werkzeug=True, gedaechtnis=False),
          "Falsche Entwürfe werden erkannt, das Modell denkt weiter"),
         ("Werkzeug ohne Metakognition", dict(metakognition=False, werkzeug=True, gedaechtnis=False),
-         "Gleich gut, aber jeder Schritt wird geprüft (teuer)"),
+         "Prüft nach jedem Schritt. Hier kaum teurer, weil fast alles nach Schritt 1 stimmt"),
     ]
     print("\nWas jedes Modul beiträgt:")
     print(f"  {'Konfiguration':<30} {'gelöst':>7} {'Ø Schritte':>11} {'Ø Prüfungen':>12}")
