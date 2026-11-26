@@ -56,9 +56,12 @@ class HopfieldGedaechtnis:
     def episoden(self, mindestens_schritte=0):
         """Alle gespeicherten Episoden, die mindestens so viele Denkschritte gekostet haben."""
         auswahl = [i for i, s in enumerate(self.schritte) if s >= mindestens_schritte]
-        n = len(self.raetsel[0]) if self.raetsel else 0
-        r = np.array([self.raetsel[i] for i in auswahl], np.int64).reshape(-1, n)
-        l = np.array([self.loesungen[i] for i in auswahl], np.int64).reshape(-1, n)
+        felder = len(self.raetsel[0]) if self.raetsel else 0
+        if not auswahl:
+            leer = np.zeros((0, felder), np.int64)
+            return leer, leer.copy(), np.zeros(0, np.int64)
+        r = np.array([self.raetsel[i] for i in auswahl], np.int64)
+        l = np.array([self.loesungen[i] for i in auswahl], np.int64)
         return r, l, np.array([self.schritte[i] for i in auswahl], np.int64)
 
     def abrufen(self, raetsel):
