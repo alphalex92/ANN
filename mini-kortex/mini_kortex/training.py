@@ -64,10 +64,13 @@ def ziehen_aus(raetsel, loesungen, batch, symmetrien=True):
 
 
 def trainingslauf(modell, ziehen, laeufe, schritte=8, lernrate=1e-3, aufwaermen=200, seed=0,
-                  pruefen=None, alle=250, protokoll=print):
+                  pruefen=None, alle=250, protokoll=print, zwischenstand=None):
     """Die eigentliche Trainingsschleife. `ziehen(rng)` liefert pro Lauf einen Batch (Rätsel, Lösungen).
 
     `pruefen(lauf)` darf einen Text zurückgeben, der alle `alle` Läufe ins Protokoll geschrieben wird.
+    `zwischenstand`: Datei, in die alle `alle` Läufe der komplette Trainingszustand geschrieben wird.
+    Existiert sie beim Start schon, geht das Training dort weiter. So kostet ein Absturz oder
+    Neustart des Rechners höchstens `alle` Läufe.
     """
     opt = torch.optim.AdamW(modell.parameters(), lr=lernrate, weight_decay=0.01)
 
@@ -79,9 +82,18 @@ def trainingslauf(modell, ziehen, laeufe, schritte=8, lernrate=1e-3, aufwaermen=
 
     sched = torch.optim.lr_scheduler.LambdaLR(opt, plan)
     rng = np.random.default_rng(seed)
+    erster = 1
+    if zwischenstand is not None and Path(zwischenstand).exists():
+        stand = torch.load(zwischenstand, weights_only=False)  # eigene Datei, enthält auch den Zufallszustand
+        modell.load_state_dict(stand["modell"])
+        opt.load_state_dict(stand["optimierer"])
+        sched.load_state_dict(stand["plan"])
+        rng.bit_generator.state = stand["zufall"]
+        erster = stand["lauf"] + 1
+        protokoll(f"Setze Training nach Lauf {stand['lauf']} fort (Zwischenstand {zwischenstand})")
     modell.train()
     start = time.time()
-    for lauf in range(1, laeufe + 1):
+    for lauf in range(erster, laeufe + 1):
         r, l = ziehen(rng)
         r, l = torch.as_tensor(r), torch.as_tensor(l)
         letzter = 0.0
@@ -95,12 +107,19 @@ def trainingslauf(modell, ziehen, laeufe, schritte=8, lernrate=1e-3, aufwaermen=
         if pruefen and (lauf % alle == 0 or lauf == laeufe):
             protokoll(f"Lauf {lauf:5d}  gelöst (Training, letzter Schritt): {letzter:5.1%}   "
                       f"{pruefen(lauf)}   ({time.time() - start:.0f} s)")
+        if zwischenstand is not None and lauf % alle == 0 and lauf < laeufe:
+            # Erst in eine Hilfsdatei schreiben, dann umbenennen: So ist der Zwischenstand nie halb geschrieben.
+            tmp = Path(str(zwischenstand) + ".tmp")
+            torch.save({"modell": modell.state_dict(), "optimierer": opt.state_dict(), "plan": sched.state_dict(),
+                        "zufall": rng.bit_generator.state, "lauf": lauf}, tmp)
+            tmp.replace(zwischenstand)
     modell.eval()
     return modell
 
 
 def trainieren(n=6, laeufe=3000, batch=128, schritte=8, d=64, innere=3, lernrate=1e-3,
-               anzahl_training=40_000, anzahl_test=2_000, leer_max=None, seed=0, protokoll=print):
+               anzahl_training=40_000, anzahl_test=2_000, leer_max=None, seed=0, protokoll=print,
+               zwischenstand=None):
     """Trainiert ein neues Modell. Mit `leer_max` nur auf Rätseln mit höchstens so vielen Leerfeldern."""
     torch.manual_seed(seed)
     (tr_r, tr_l, _), (te_r, te_l, te_t) = daten_laden(n, anzahl_training, anzahl_test, seed, protokoll=protokoll)
@@ -117,7 +136,7 @@ def trainieren(n=6, laeufe=3000, batch=128, schritte=8, d=64, innere=3, lernrate
                 f"{acc[0]:5.1%} / {acc[schritte // 2 - 1]:5.1%} / {acc[-1]:5.1%}")
 
     trainingslauf(modell, ziehen_aus(tr_r, tr_l, batch), laeufe, schritte, lernrate, seed=seed,
-                  pruefen=pruefen, protokoll=protokoll)
+                  pruefen=pruefen, protokoll=protokoll, zwischenstand=zwischenstand)
     return modell, (te_r, te_l, te_t)
 
 

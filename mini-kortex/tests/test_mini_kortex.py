@@ -140,3 +140,22 @@ def test_schlaf_trainiert_eine_kopie_auf_eigenen_episoden():
     neu = schlafen(modell, g, alte=(raetsel, loesungen), laeufe=3, batch=8, schritte=2, protokoll=lambda *_: None)
     assert all(torch.equal(v, modell.state_dict()[k]) for k, v in vorher.items())  # Original unverändert
     assert any(not torch.equal(v, neu.state_dict()[k]) for k, v in vorher.items())  # Kopie hat gelernt
+
+
+def test_training_setzt_beim_zwischenstand_fort(tmp_path):
+    from mini_kortex.training import trainingslauf, ziehen_aus
+    raetsel, loesungen, _ = datensatz(16, np.random.default_rng(14))
+    ziehen = ziehen_aus(raetsel, loesungen, 4)
+    still = dict(schritte=1, aufwaermen=1, alle=2, protokoll=lambda *_: None)
+
+    torch.manual_seed(0)
+    durchgehend = trainingslauf(DenkModell(d=8), ziehen, 4, **still)
+
+    stand = tmp_path / "stand.pt"
+    torch.manual_seed(0)
+    trainingslauf(DenkModell(d=8), ziehen, 4, zwischenstand=stand, **still)  # schreibt Stand nach Lauf 2
+    # "Absturz" nach Lauf 2 nachstellen: Ein frisches Modell setzt beim Zwischenstand fort.
+    torch.manual_seed(1)
+    fortgesetzt = trainingslauf(DenkModell(d=8), ziehen, 4, zwischenstand=stand, **still)
+    for k, v in durchgehend.state_dict().items():
+        assert torch.allclose(v, fortgesetzt.state_dict()[k], atol=1e-6), k

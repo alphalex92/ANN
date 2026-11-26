@@ -44,9 +44,11 @@ def befehl_trainieren(args):
     if args.threads:
         torch.set_num_threads(args.threads)
     leer_max = args.leer_max if args.leer_max is not None else LEER_TRAINING[n]
+    zwischenstand = modellpfad(n, ".zwischenstand")
     modell, _ = trainieren(n=n, laeufe=args.laeufe, schritte=args.schritte, d=args.d, lernrate=args.lernrate,
-                           leer_max=leer_max)
+                           leer_max=leer_max, zwischenstand=zwischenstand)
     speichern(modell, modellpfad(n), info={"leer_max": leer_max})
+    zwischenstand.unlink(missing_ok=True)
     print(f"\nGespeichert in {modellpfad(n)}")
 
 
@@ -194,7 +196,8 @@ def main():
     p.add_argument("--groesse", type=int, choices=[6, 9], default=9, help="6×6 oder 9×9 (Standard: 9)")
     sub = p.add_subparsers(dest="befehl", required=True)
 
-    t = sub.add_parser("trainieren", help="Modell trainieren und als mini_kortex_<groesse>.pt speichern")
+    t = sub.add_parser("trainieren", help="Modell trainieren und als mini_kortex_<groesse>.pt speichern "
+                       "(setzt nach einem Abbruch beim letzten Zwischenstand fort)")
     t.add_argument("--laeufe", type=int, default=3000, help="Anzahl Trainings-Batches")
     t.add_argument("--schritte", type=int, default=8, help="Denkschritte pro Rätsel beim Training")
     t.add_argument("--d", type=int, default=64, help="Breite der Vektoren im Arbeitsraum")
