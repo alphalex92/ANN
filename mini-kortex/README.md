@@ -2,8 +2,8 @@
 
 Ein Spielzeug-Prototyp für eine **hybride Denkarchitektur**: Statt eines großen Netzes arbeiten
 mehrere kleine, spezialisierte Module zusammen, wie Regionen im Gehirn. Die Aufgabe ist
-**6×6-Sudoku**. Das ist klein genug für die CPU, verlangt aber echte Schlussketten: Eine Ziffer
-folgt aus einer anderen, die wiederum aus einer dritten folgt.
+**Sudoku** (9×9, zum schnellen Ausprobieren auch 6×6). Das ist klein genug für die CPU, verlangt
+aber echte Schlussketten: Eine Ziffer folgt aus einer anderen, die wiederum aus einer dritten folgt.
 
 Das Projekt ist eigenständig und liegt nur im selben Repository wie der Bytes-Erkenner. Anders als
 dieser nutzt es **PyTorch** statt reinem numpy. Ein rekursives Netz von Hand abzuleiten wäre
@@ -39,6 +39,7 @@ möglich, würde aber die eigentliche Idee unter sehr viel Rechenarbeit begraben
 | **Metakognition** | [modell.py](mini_kortex/modell.py) | Anteriorer cingulärer Kortex | Schätzt nach jedem Schritt: "Ist mein Entwurf komplett richtig?" |
 | **Werkzeug** | [sudoku.py](mini_kortex/sudoku.py) | (keins) | Exakte Regelprüfung. Kein Lernen, keine Unsicherheit |
 | **Gedächtnis** | [gedaechtnis.py](mini_kortex/gedaechtnis.py) | Hippocampus | Modernes Hopfield-Netz: speichert ein Erlebnis in einem Schritt, ruft über Ähnlichkeit ab |
+| **Konsolidierung** | [konsolidierung.py](mini_kortex/konsolidierung.py) | Schlaf, Hippocampus-Replay | Trainiert das Netz auf eigenen, geprüften Erlebnissen nach, vermischt mit alten Rätseln |
 | **Steuerung** | [agent.py](mini_kortex/agent.py) | | Verbindet alles zum Ablauf. Jedes Modul lässt sich abschalten |
 
 ## Schnellstart
@@ -54,23 +55,35 @@ pip install -r requirements.txt
 ```
 
 ```bash
-python -m mini_kortex --groesse 6 trainieren
+python -m mini_kortex trainieren
 ```
 
-Das dauert auf 4 CPU-Kernen etwa eine halbe Stunde. Beim ersten Mal werden zusätzlich die Rätsel
-erzeugt (etwa 1 Minute) und als `daten_sudoku6.npz` abgelegt, das Modell landet in `mini_kortex_6.pt`. Die Ergebnisse unten gelten für 6×6; 9×9 und Konsolidierung sind in Arbeit.
+Das trainiert ein 9×9-Modell, bewusst nur auf Rätseln mit höchstens 46 leeren Feldern. Die
+schwereren bleiben für die Konsolidierung übrig. Auf 4 CPU-Kernen dauert das gut eine Stunde.
+Beim ersten Mal werden zusätzlich 42.000 Rätsel erzeugt (etwa 1 Minute) und als
+`daten_sudoku9.npz` abgelegt, das Modell landet in `mini_kortex_9.pt`. Alle 250 Läufe wird ein
+Zwischenstand gespeichert. Bricht das Training ab, setzt derselbe Befehl dort fort.
 
 ```bash
-python -m mini_kortex --groesse 6 auswerten
+python -m mini_kortex auswerten
 ```
 
 ```bash
-python -m mini_kortex --groesse 6 loesen --leer 26
+python -m mini_kortex konsolidieren
 ```
 
-`loesen` erzeugt ein neues Rätsel und zeigt nach jedem Denkschritt, wie viele Felder noch falsch
-sind, wie sicher sich das Modell ist und was der Regelprüfer sagt. `beispiele` zeigt ein paar
-Rätsel, `pytest` startet die Tests.
+```bash
+python -m mini_kortex loesen
+```
+
+`konsolidieren` spielt drei Wach-Schlaf-Zyklen durch (etwa 30 Minuten) und speichert das Ergebnis
+als `mini_kortex_9_konsolidiert.pt`. `loesen` erzeugt ein neues Rätsel und zeigt nach jedem
+Denkschritt, wie viele Felder noch falsch sind, wie sicher sich das Modell ist und was der
+Regelprüfer sagt. Mit `--modell mini_kortex_9_konsolidiert.pt` schaut man dem ausgeschlafenen
+Modell zu. `beispiele` zeigt ein paar Rätsel, `pytest` startet die Tests.
+
+Mit `--groesse 6` vor dem Befehl läuft alles auf 6×6, das Training dauert dann etwa eine halbe
+Stunde (zum Beispiel `python -m mini_kortex --groesse 6 trainieren`).
 
 ## Wie es funktioniert
 
@@ -82,8 +95,8 @@ pro Denkschritt:   3 ×  z ← f(x + y + z)     den Gedanken verfeinern
                    1 ×  y ← f(y + z)         den Entwurf anpassen
 ```
 
-Dasselbe kleine Netz `f` macht beides. 16 Denkschritte entsprechen 64 Durchläufen, also einem Netz
-mit 128 Schichten, aber mit den Parametern von 2 Schichten. **Tiefe kostet Rechenzeit, nicht
+Dasselbe kleine Netz `f` macht beides. 32 Denkschritte entsprechen 128 Durchläufen, also einem Netz
+mit 256 Schichten, aber mit den Parametern von 2 Schichten. **Tiefe kostet Rechenzeit, nicht
 Speicher.**
 
 **Tiefe Überwachung.** Beim Training soll die Antwort nach *jedem* Denkschritt schon möglichst
@@ -102,31 +115,124 @@ geprüft wird. Ist der Entwurf falsch, denkt das Modell weiter, statt Unsinn abz
 Update-Regel moderner Hopfield-Netze und zugleich die Attention-Formel eines Transformers. Speichern
 ist ein einziger Schritt ohne Training: Lernen aus einem Beispiel.
 
+**Konsolidierung.** Vorbild ist die Theorie der *komplementären Lernsysteme* (McClelland,
+McNaughton & O'Reilly 1995): Der Hippocampus speichert Erlebnisse sofort, der Kortex lernt langsam,
+und im Schlaf werden Erlebnisse erneut abgespielt. Ein Zyklus besteht aus zwei Phasen:
+
+1. **Wach:** Das Modell bekommt neue, *schwerere* Rätsel als im Training. Mit bis zu 32
+   Denkschritten, Metakognition und Regelprüfer löst es einen Teil davon. Jede bestätigte Lösung
+   kommt ins Gedächtnis, zusammen mit der Zahl der Denkschritte.
+2. **Schlaf:** Das Netz wird auf den Episoden nachtrainiert, die mindestens 2 Denkschritte gekostet
+   haben. Die "richtigen Antworten" stammen nur aus eigener, vom Regelprüfer bestätigter Erfahrung;
+   die echten Lösungen werden nur zum Messen benutzt. Jede Episode wird in Symmetrie-Varianten
+   abgespielt, und jeder Batch ist zur Hälfte mit alten Trainingsrätseln gemischt (Replay).
+
+Gemessen wird danach auf *anderen*, nie gesehenen Rätseln. Die Idee ähnelt *Expert Iteration*
+(Anthony u. a. 2017) und *STaR* (Zelikman u. a. 2022): Langsames, gründliches Nachdenken wird zu
+schneller Intuition.
+
+**Symmetrien.** Ziffern umbenennen, Zeilen innerhalb eines Bandes tauschen, Bänder tauschen
+(dasselbe für Spalten) und an der Diagonale spiegeln: Das Rätsel bleibt gleich schwer, sieht aber
+anders aus. Beim Training wird jeder Batch so umgebaut, das Netz sieht dasselbe Rätsel praktisch nie
+zweimal.
+
 **Denktiefe.** [sudoku.py](mini_kortex/sudoku.py) misst für jedes Rätsel, wie viele Runden einfacher
 Logik ein Mensch mindestens braucht (nackte und versteckte Einer, alle gleichzeitig pro Runde).
 "Probieren" heißt: Die einfachen Regeln reichen nicht, man muss weiter vorausdenken.
 
-## Was man sieht
+## Ergebnisse 9×9
 
-Nach 3000 Trainingsläufen (ca. 30 Minuten auf 4 CPU-Kernen) mit einem Modell von nur
-**88.991 Parametern**, gemessen auf 2000 Testrätseln, die es beim Training nie gesehen hat:
+Ein Modell mit **134.648 Parametern**, trainiert in 3000 Läufen (62 Minuten auf 4 CPU-Kernen),
+nur auf Rätseln mit 30–46 leeren Feldern. Gemessen auf 2000 nie gesehenen Rätseln mit 30–58
+leeren Feldern, also auch auf deutlich schwereren als im Training.
 
-**1. Längeres Nachdenken löst schwerere Rätsel.**
+**1. Längeres Nachdenken hilft, bis die Schlusskette zu lang wird.**
 
-| Denktiefe | Anzahl | 1 Schritt | 4 Schritte | 16 Schritte | Ø Schritte mit Metakognition |
+| Denktiefe | Anzahl | 1 Schritt | 8 Schritte | 32 Schritte | Ø Schritte mit Metakognition |
 |---|---:|---:|---:|---:|---:|
-| 1–3 | 1313 | 100 % | 100 % | 100 % | 1,0 |
-| 4 | 355 | 98,6 % | 100 % | 100 % | 1,0 |
-| 5 | 249 | 88,8 % | 100 % | 100 % | 1,1 |
-| 6 und mehr | 74 | 77,0 % | 98,6 % | 100 % | 1,3 |
-| Probieren | 9 | 44,4 % | 66,7 % | 100 % | 3,1 |
+| 1–3 | 805 | 100 % | 100 % | 100 % | 1,0 |
+| 4–6 | 618 | 56,5 % | 97,6 % | 97,9 % | 1,9 |
+| 7–9 | 240 | 1,7 % | 46,2 % | 47,5 % | 15,6 |
+| 10 und mehr | 141 | 0 % | 9,2 % | 9,9 % | 27,2 |
+| Probieren | 196 | 0 % | 7,1 % | 14,8 % | 27,4 |
 
-Leichte Rätsel schafft das Netz in einem Durchlauf. Je länger die Schlusskette, desto mehr
-Denkschritte braucht es, und mit 16 Schritten löst es **alle** Testrätsel. Die rechte Spalte
-zeigt, dass die Metakognition das selbst merkt: Bei leichten Rätseln hört sie nach einem Schritt
-auf, bei den schwersten denkt sie im Schnitt dreimal so lange nach.
+Bei mittlerer Tiefe macht Nachdenken aus 57 % fast 98 %. Bei langen Schlussketten stößt das kleine
+Netz an seine Grenze: Über 8 Schritte hinaus bringt Weiterdenken kaum noch etwas. Das liegt
+vermutlich auch daran, dass beim Training nur 8 Schritte geübt wurden. Die Metakognition merkt, was
+schwer ist: Bei leichten Rätseln hört sie nach einem Schritt auf, bei den schwersten denkt sie bis
+zum Limit.
 
-So sieht das bei einem schweren Rätsel aus (`python -m mini_kortex --groesse 6 loesen --leer 28 --seed 71`):
+**2. Jetzt zeigt sich der Nutzen jedes Moduls.**
+
+| Konfiguration | gelöst | Ø Denkschritte | Ø Prüfungen |
+|---|---:|---:|---:|
+| Nur Denkkern, 1 Schritt | 57,9 % | 1,00 | 0 |
+| Denkkern, immer 32 Schritte | 78,3 % | 32,00 | 0 |
+| + Metakognition | 78,0 % | **7,46** | 0 |
+| + Werkzeug (Regelprüfer) | **81,4 %** | 7,63 | **0,86** |
+| Werkzeug ohne Metakognition | 82,3 % | 7,30 | 7,30 |
+| Mit Gedächtnis, 2. Durchgang | 81,4 % | 5,95 | 0,82 |
+| Verwandte Rätsel (+2 Vorgaben) | 92,0 % | 3,15 | 0,95 |
+
+- **Metakognition** erreicht dasselbe wie "immer 32 Schritte" mit einem Viertel der Rechenzeit.
+- **Werkzeug** hebt die Quote um 3,4 Prozentpunkte: Ist ein Entwurf falsch, denkt das Modell weiter,
+  statt abzugeben. Eine falsche Antwort mit Prüfsiegel kam nie vor.
+- **Metakognition + Werkzeug**: Prüft man nach jedem Schritt, ist man 0,9 Prozentpunkte besser, braucht
+  aber **8,5-mal so viele Prüfungen**. Das ist der Unterschied, der bei 6×6 noch unsichtbar war. Bei
+  einem teuren Werkzeug (ein Beweiser, ein echtes Experiment) zählt genau das.
+- **Gedächtnis** beantwortet im zweiten Durchgang alle schon gelösten Rätsel (81 %) ohne
+  Nachdenken. Die übrigen 19 % kosten weiter das volle Limit, deshalb bleiben im Schnitt 5,95
+  Schritte. Verwandte Rätsel erkennt es ebenso wieder, und durch die zwei zusätzlichen Vorgaben
+  löst das Modell noch einige der vorher ungelösten.
+
+## Ergebnisse Konsolidierung
+
+Ausgangspunkt ist das Modell von oben. An jedem "Tag" erlebt es 1000 neue Rätsel mit 47–58 leeren
+Feldern, also schwerer als alles im Training. Jede "Nacht" hat 300 Trainingsläufe. Gemessen wird
+auf je 1000 anderen schweren und leichten Rätseln, die nie erlebt wurden.
+
+| | schwer, 8 Schritte | schwer, Agent | leicht, 1 Schritt | leicht, 8 Schritte |
+|---|---:|---:|---:|---:|
+| Vor dem ersten Schlaf | 47,1 % | 55,8 % | 90,9 % | 100 % |
+| Nacht 1, mit Replay | 74,1 % | 83,3 % | 90,3 % | 99,9 % |
+| Nacht 2, mit Replay | 81,7 % | 89,7 % | 90,3 % | 100 % |
+| Nacht 3, mit Replay | **83,4 %** | **91,3 %** | 90,4 % | 99,9 % |
+| *Zum Vergleich: Nacht 1, nur neue Erlebnisse* | 75,5 % | 86,1 % | 91,2 % | 100 % |
+
+"Agent" heißt: bis zu 32 Schritte mit Metakognition und Regelprüfer.
+
+| Wachphase | selbst gelöst und geprüft | neu zum Üben (≥ 2 Schritte) | falsch, aber geprüft |
+|---|---:|---:|---:|
+| Tag 1 | 53,3 % | 444 | 0 |
+| Tag 2 | 83,7 % | 738 | 0 |
+| Tag 3 | 90,3 % | 796 | 0 |
+
+- **Das Modell lernt aus eigener Erfahrung.** Auf ungesehenen schweren Rätseln steigt die Quote in
+  drei Nächten von 56 % auf 91 %, ganz ohne Lösungen von außen. Jeden Tag löst es mehr der neuen
+  Rätsel selbst und hat damit in der nächsten Nacht mehr zu üben.
+- **Aus langsamem Denken wird schnelle Intuition.** Mit festen 8 Schritten steigt die Quote von 47 %
+  auf 83 %: Was vorher nur mit langem Nachdenken und Prüfen klappte, schafft das Netz jetzt in
+  wenigen Schritten.
+- **Vergessen trat nicht auf**, auch nicht ohne Replay. Die leichten Rätsel bleiben bei 90–91 % in
+  einem Schritt und 100 % in acht. Replay war hier also nicht nötig. Ohne Replay war das Modell auf
+  den schweren Rätseln nach Nacht 1 sogar etwas besser, weil jeder Batch doppelt so viele neue
+  Erlebnisse enthielt. Vermutlich liegt das daran, dass schwere und leichte Rätsel nach denselben
+  Regeln funktionieren und sich das Üben nicht widerspricht. Vergessen erwartet man, wenn das Neue
+  dem Alten widerspricht.
+
+Zwei Einschränkungen: Das Modell kann nur aus Rätseln lernen, die es mit viel Bedenkzeit schon
+selbst lösen kann. Wirklich Neues (andere Regeln) kann es so nicht lernen. Und es fehlt der
+Vergleich mit einem Modell, das auf denselben schweren Rätseln mit den echten Lösungen trainiert
+wurde. Der würde zeigen, wie nah das Selbstlernen an Lernen mit Lehrer herankommt.
+
+## Ergebnisse 6×6
+
+Ein Modell mit 88.991 Parametern, 3000 Läufe (ca. 30 Minuten), 2000 Testrätsel mit 12–28 leeren
+Feldern. Mit 16 Denkschritten löst es **alle**. Die Metakognition braucht im Schnitt 1,04 Schritte
+(bei den schwersten 3,1), mit Regelprüfer stimmen alle Antworten. 6×6 ist für dieses Modell zu
+leicht, um die Module voneinander zu unterscheiden (nur 83 von 2000 Rätseln sind schwer).
+
+So sieht ein schweres 6×6-Rätsel aus (`python -m mini_kortex --groesse 6 loesen --leer 28 --seed 71`):
 
 ```
 Denkschritt  1:  7 Felder falsch · Zuversicht 13% · Regelprüfer: ungültig
@@ -134,44 +240,18 @@ Denkschritt  2:  5 Felder falsch · Zuversicht 2% · Regelprüfer: ungültig
 Denkschritt  3:  0 Felder falsch · Zuversicht 48% · Regelprüfer: gültig ✔
 ```
 
-**2. Jedes Modul bringt etwas anderes.**
-
-| Konfiguration | gelöst | Ø Denkschritte | Ø Prüfungen |
-|---|---:|---:|---:|
-| Nur Denkkern, 1 Schritt | 97,2 % | 1,00 | 0 |
-| Denkkern, immer 16 Schritte | 100 % | 16,00 | 0 |
-| + Metakognition | 99,2 % | 1,04 | 0 |
-| + Werkzeug (Regelprüfer) | **100 %** | **1,04** | 1,01 |
-| Mit Gedächtnis, 2. Durchgang | 100 % | **0** | 1,00 |
-| Verwandte Rätsel (+2 Vorgaben) | 100 % | **0** | 1,00 |
-
-- **Metakognition** spart 94 % der Rechenzeit gegenüber "immer 16 Schritte". Allein ist sie
-  aber manchmal zu selbstsicher: 0,8 % der Rätsel gibt sie falsch ab.
-- **Werkzeug** schließt genau diese Lücke. Hält der Regelprüfer einen Entwurf für falsch, denkt das
-  Modell weiter. Ergebnis: alles richtig bei praktisch gleicher Rechenzeit. Eine falsche Antwort
-  mit Prüfsiegel kam nie vor (das prüft auch ein Test).
-- **Gedächtnis** beantwortet bekannte Rätsel ganz ohne Nachdenken, auch wenn sie leicht
-  verändert sind. Das gelang nach einem einzigen Speichervorgang, ohne Training.
-
-Ohne Metakognition, aber mit Werkzeug (Prüfung nach jedem Schritt) kommt ebenfalls 100 % heraus,
-mit 1,04 statt 1,01 Prüfungen pro Rätsel. Hier ist der Unterschied klein, weil fast jedes Rätsel
-nach Schritt 1 stimmt. Bei teuren Werkzeugen (ein Beweiser, ein Experiment) wäre er groß.
-
-Eine Einschränkung: 6×6-Sudoku ist für dieses Modell nicht mehr schwer. Die schwierigen Fälle sind
-selten (83 von 2000), und deshalb liegen alle Varianten nah beieinander. Wer die Unterschiede
-deutlicher sehen will, sollte 9×9 probieren.
-
 ## Was fehlt (und Ideen zum Weiterprobieren)
 
 Der Prototyp zeigt die Bausteine im Kleinen. Weltmodell, Sprachkern und Wertsystem der großen
 Architektur fehlen, weil Sudoku sie nicht braucht.
 
-- **Konsolidierung ("Schlaf")**: Rätsel, die nur mit vielen Schritten gelöst wurden, aus dem
-  Gedächtnis nachtrainieren. Wird das Modell dadurch schneller, ohne Altes zu vergessen?
-- `--schritte 16` beim Training: Lernt das Modell tiefere Schlussketten?
-- `--d 32` gegen `--d 128`: Wie klein darf der Arbeitsraum werden?
+- **Lehrer-Vergleich**: Dieselben schweren Rätsel mit den echten Lösungen nachtrainieren. Wie nah
+  kommt das Selbstlernen heran?
+- **Vergessen provozieren**: Im Schlaf eine Regelvariante üben (zum Beispiel zusätzlich beide
+  Diagonalen). Hilft dann Replay?
+- `--schritte 16` beim Training: Lernt das Modell tiefere Schlussketten, sodass Weiterdenken über 8
+  Schritte hinaus wieder etwas bringt?
+- `--d 128` (mit GPU): Wie viel bringt ein breiterer Arbeitsraum bei den tiefen Rätseln?
 - Die Metakognition mit `schwelle=0.9` statt `0.5` in [agent.py](mini_kortex/agent.py): weniger
   Fehler, mehr Schritte?
-- 9×9-Sudoku: In `sudoku.py` reicht es, `N` und die Kastengröße zu ändern. Das Training wird aber
-  deutlich länger.
 - Den MLP-Mixer in `modell.py` durch Attention ersetzen und vergleichen.

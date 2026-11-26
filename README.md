@@ -107,5 +107,5 @@ Nach 20 Epochen liegt das Netz bei etwa **92 %** auf den Testdaten (in ~3 Sekund
 
 Ein eigenständiges Projekt im Ordner [mini-kortex](mini-kortex/): ein Prototyp für eine hybride
 Denkarchitektur aus kleinen, spezialisierten Modulen (rekursiver Denkkern, Metakognition,
-Regelprüfer, Hopfield-Gedächtnis), getestet an 6×6-Sudoku. Mit PyTorch, eigenem README,
-eigenen Abhängigkeiten und Tests.
+Regelprüfer, Hopfield-Gedächtnis, Konsolidierung im "Schlaf"), getestet an 9×9-Sudoku. Mit PyTorch,
+eigenem README, eigenen Abhängigkeiten und Tests.
