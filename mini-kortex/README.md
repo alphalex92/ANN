@@ -260,6 +260,27 @@ Regelprüfer.
 - Seed 0 von d=64/8 erreichte hier 86,1 %, der Lauf in der Cloud mit derselben Einstellung 81,4 %.
   Einzelne Läufe sind also nur auf etwa ±3 Punkte genau.
 
+**Konsolidierung mit dem tieferen Modell.** Dasselbe Experiment wie oben (drei Tage mit je 1000 schweren
+Rätseln, 300 Läufe pro Nacht), auf der GPU in drei Minuten. d=128/16 übt im Schlaf mit 16 Denkschritten,
+d=64/8 mit 8. Jeweils Seed 0, gemessen auf denselben 1000 schweren, nie erlebten Rätseln.
+
+| | d=128/16, 8 Schritte | d=128/16, Agent | d=64/8, 8 Schritte | d=64/8, Agent |
+|---|---:|---:|---:|---:|
+| Vor dem ersten Schlaf | 71,1 % | 71,5 % | 53,7 % | 65,7 % |
+| Nacht 1, mit Replay | 84,1 % | 91,1 % | 77,8 % | 87,8 % |
+| Nacht 2, mit Replay | 86,4 % | 91,9 % | 81,4 % | 89,8 % |
+| Nacht 3, mit Replay | **88,0 %** | **94,1 %** | 83,7 % | 91,0 % |
+| *Nacht 1, nur neue Erlebnisse* | 85,1 % | 91,0 % | 80,7 % | 89,4 % |
+
+- Das tiefere Modell startet 6 Punkte höher und endet 3 Punkte höher. Den größten Teil holen beide
+  in der ersten Nacht.
+- **Der Schlaf heilt das Abdriften.** Vor dem Schlaf war d=128/16 nach 32 Schritten schlechter als
+  nach 8 (64,8 % gegen 71,1 %), danach besser (94,1 % gegen 88,0 %). Im Schlaf übt es auf eigenen,
+  längeren Lösungswegen.
+- Leichte Rätsel bleiben bei 100 % in 8 Schritten. In einem einzigen Schritt löst d=128/16 davon
+  nur 82–84 % (d=64/8: 90–92 %): Das breitere Modell verteilt auch leichte Rätsel auf mehrere Schritte.
+- Wieder keine einzige falsche Lösung mit Prüfsiegel, und Replay bringt nach Nacht 1 keinen Vorteil.
+
 ## Ergebnisse 6×6
 
 Ein Modell mit 88.991 Parametern, 3000 Läufe (ca. 30 Minuten), 2000 Testrätsel mit 12–28 leeren
