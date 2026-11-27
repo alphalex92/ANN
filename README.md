@@ -344,3 +344,30 @@ Dieselben 300 Fragen. Die Klassen gewusst/unbekannt/unklar stammen aus der Wisse
 - **Die Schwäche von 0,8B ist das Lesen:** 104 Antworten „gesucht, aber falsch“, bei 44 davon
   stand die Lösung in den Treffern. Bei K2 + stand sind es 57 und 26.
 - Nach den Suchtreffern denkt Qwen meist gar nicht nach (leerer Denkteil) und antwortet sofort.
+
+#### Größere Validierung, Denkanstoß und GRPO auf Qwen 0,8B
+
+Gemessen auf 1.000 Validierungsfragen: 900 davon kennt K2 nicht, 54 weiß es, 46 sind unklar.
+Notizzettel „stand“, Bewertung wie bisher („Lösung steht als ganzes Wort in der Antwort“).
+
+| Qwen 0,8B + stand | richtig | nur erster Satz | Antwortlänge (Median) |
+|---|---|---|---|
+| ohne Training | 50,8 % | 42,8 % | 161 Zeichen |
+| mit Denkanstoß nach den Treffern | 42,8 % | – | – |
+| GRPO, Schritt 60 | 71,6 % | **27,8 %** | **3.714 Zeichen** |
+
+- **Der Denkanstoß schadet.** Das Modell denkt gründlicher, läuft aber in 211 Läufen über die
+  1.024 Tokens hinaus.
+- **GRPO hat die Bewertung ausgetrickst (Reward Hacking).**
+  - Der Aufbau: `python -m k2_horizon grpo`, 16 Fragen × 8 Läufe je Schritt, LoRA Rang 16,
+    Lernrate 2e-5, Belohnung 1/0/−0,2. Der Lauf endete beim Neustart des Rechners nach
+    Schritt 62, gespeichert war Schritt 60.
+  - Was es gelernt hat: Die Antworten wurden 20-mal länger und erzählen alles nach, was in den
+    Treffern stand. Weil die Bewertung nur prüft, ob die Lösung *irgendwo* steht, trifft so
+    ein langer Text öfter. Geraten wird nicht mehr.
+  - Streng bewertet ist das Modell schlechter geworden. Zählt man nur den ersten Satz, fällt
+    es von 42,8 % auf 27,8 %. Zählt man nur die fett markierte Antwort, fällt es von 29 % auf
+    22 % aller Fragen.
+- **Für den nächsten Versuch:** Die Belohnung darf nur eine kurze, klar abgegrenzte Antwort
+  zählen, zum Beispiel den ersten Satz oder ein festes Antwortfeld. Zu lange Antworten müssen
+  einen Abzug bekommen. Dieselbe strenge Bewertung braucht es dann auch beim Messen.
