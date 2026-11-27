@@ -56,8 +56,8 @@ def befehl_trainieren(args):
     zwischenstand = modellpfad(n, ".zwischenstand")
     modell, _ = trainieren(n=n, laeufe=args.laeufe, batch=args.batch, schritte=args.schritte, d=args.d,
                            lernrate=args.lernrate, leer_max=leer_max, zwischenstand=zwischenstand,
-                           geraet=args.geraet)
-    speichern(modell, modellpfad(n), info={"leer_max": leer_max})
+                           geraet=args.geraet, seed=args.seed)
+    speichern(modell, modellpfad(n), info={"leer_max": leer_max, "schritte": args.schritte})
     zwischenstand.unlink(missing_ok=True)
     print(f"\nGespeichert in {modellpfad(n)}")
 
@@ -148,8 +148,12 @@ def befehl_auswerten(args):
 def befehl_konsolidieren(args):
     n = args.groesse
     modell = _modell(n, args.geraet)
-    leer_basis = laden(modellpfad(n), nur_info=True).get("leer_max", LEER_TRAINING[n])
-    print(f"Modell wurde auf Rätseln mit höchstens {leer_basis} leeren Feldern trainiert.")
+    info = laden(modellpfad(n), nur_info=True)
+    leer_basis = info.get("leer_max", LEER_TRAINING[n])
+    # Im Schlaf so viele Denkschritte üben wie im Training, sonst verlernt das Modell die hinteren.
+    schritte = args.schritte or info.get("schritte", 8)
+    print(f"Modell wurde auf Rätseln mit höchstens {leer_basis} leeren Feldern trainiert. "
+          f"Im Schlaf: {schritte} Denkschritte pro Rätsel.")
     print(f"Erzeuge Rätsel: {args.anzahl_wach} zum Erleben (schwerer), je {args.anzahl_test} zum Testen …")
     wach_daten, schwer, leicht = experiment_daten(n, leer_basis, args.anzahl_wach, args.anzahl_test)
     (tr_r, tr_l, _), _ = daten_laden(n, 40_000, 0)
@@ -157,9 +161,9 @@ def befehl_konsolidieren(args):
     alte = (tr_r[auswahl], tr_l[auswahl])
     print(f"Testmengen: schwer = mehr als {leer_basis} leere Felder, leicht = höchstens {leer_basis}.\n")
     konsolidiert, zeilen, wachphasen = experiment(modell, alte, wach_daten, schwer, leicht, zyklen=args.zyklen,
-                                                  laeufe=args.laeufe, max_schritte=MAX_SCHRITTE[n])
+                                                  laeufe=args.laeufe, max_schritte=MAX_SCHRITTE[n], schritte=schritte)
     pfad = modellpfad(n, "_konsolidiert")
-    speichern(konsolidiert, pfad, info={"leer_max": leer_basis})
+    speichern(konsolidiert, pfad, info={"leer_max": leer_basis, "schritte": schritte})
     print(f"\nKonsolidiertes Modell gespeichert in {pfad}")
     if args.json:
         Path(args.json).write_text(json.dumps({
@@ -217,6 +221,8 @@ def main():
     t.add_argument("--lernrate", type=float, default=1e-3)
     t.add_argument("--leer-max", type=int, default=None,
                    help="nur auf Rätseln mit höchstens so vielen Leerfeldern trainieren (Standard: 28 bei 6×6, 46 bei 9×9)")
+    t.add_argument("--seed", type=int, default=0,
+                   help="Startwerte und Reihenfolge der Batches; die Rätsel bleiben dieselben")
     t.add_argument("--threads", type=int, default=0)
     t.set_defaults(f=befehl_trainieren)
 
@@ -228,6 +234,8 @@ def main():
     k = sub.add_parser("konsolidieren", help="Wach-Schlaf-Zyklen: aus eigener Erfahrung lernen")
     k.add_argument("--zyklen", type=int, default=3, help="Anzahl Tage (Wachphase + Nacht)")
     k.add_argument("--laeufe", type=int, default=300, help="Trainingsläufe pro Nacht")
+    k.add_argument("--schritte", type=int, default=None,
+                   help="Denkschritte pro Rätsel im Schlaf (Standard: wie im Training, sonst 8)")
     k.add_argument("--anzahl-wach", type=int, default=3000, help="schwere Rätsel zum Erleben, verteilt auf die Tage")
     k.add_argument("--anzahl-test", type=int, default=1000, help="Rätsel pro Testmenge (schwer und leicht)")
     k.add_argument("--json", help="Ergebnisse zusätzlich als JSON speichern")

@@ -118,10 +118,11 @@ def experiment_daten(n, leer_basis, anzahl_wach, anzahl_test, seed=0, prozesse=4
 
 
 def experiment(modell, alte, wach_daten, schwer, leicht, zyklen=3, laeufe=300, max_schritte=32,
-               protokoll=print):
+               schritte=8, protokoll=print):
     """Mehrere Wach-Schlaf-Zyklen; nach dem ersten zusätzlich der Vergleich "Schlaf ohne Replay".
 
     Die Erlebnis-Rätsel werden auf die Zyklen aufgeteilt: Jede Nacht kommt neue Erfahrung dazu.
+    `schritte`: Denkschritte pro Rätsel beim nächtlichen Üben, am besten so viele wie im Training.
     Gibt die Tabellenzeilen und eine Liste mit Kennzahlen pro Wachphase zurück.
     """
     zeilen = [("Vor dem ersten Schlaf", messen(modell, schwer, leicht, max_schritte))]
@@ -139,10 +140,11 @@ def experiment(modell, alte, wach_daten, schwer, leicht, zyklen=3, laeufe=300, m
                   f"(Ø {wachphasen[-1]['schritte']:.1f} Schritte). Gedächtnis: {len(gedaechtnis)} Episoden. "
                   f"Falsch, aber geprüft: {falsch_geprueft}")
         if zyklus == 1:
-            ohne = schlafen(modell, gedaechtnis, alte=None, laeufe=laeufe, protokoll=protokoll)
+            ohne = schlafen(modell, gedaechtnis, alte=None, laeufe=laeufe, schritte=schritte, protokoll=protokoll)
             zeilen.append(("Nacht 1, nur neue Erlebnisse", messen(ohne, schwer, leicht, max_schritte)))
             tabelle(zeilen[-1:], protokoll)
-        modell = schlafen(modell, gedaechtnis, alte=alte, laeufe=laeufe, seed=zyklus, protokoll=protokoll)
+        modell = schlafen(modell, gedaechtnis, alte=alte, laeufe=laeufe, schritte=schritte, seed=zyklus,
+                          protokoll=protokoll)
         zeilen.append((f"Nacht {zyklus}, mit Replay", messen(modell, schwer, leicht, max_schritte)))
         tabelle(zeilen[-1:], protokoll)
     return modell, zeilen, wachphasen

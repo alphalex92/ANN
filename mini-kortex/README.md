@@ -229,6 +229,37 @@ selbst lösen kann. Wirklich Neues (andere Regeln) kann es so nicht lernen. Und 
 Vergleich mit einem Modell, das auf denselben schweren Rätseln mit den echten Lösungen trainiert
 wurde. Der würde zeigen, wie nah das Selbstlernen an Lernen mit Lehrer herankommt.
 
+## Ergebnisse auf der GPU: breiter und tiefer
+
+Auf einer RTX 5080 ist das Training bei Batch 128 etwa 16-mal schneller als auf 4 CPU-Kernen:
+3000 Läufe dauern 2 statt 37 Minuten, mit `--d 128 --schritte 16` sind es 7 Minuten. Damit ließen
+sich vier Varianten mit je drei Seeds vergleichen (`--seed 0/1/2`, gleiche Rätsel, andere Startwerte
+und Reihenfolge der Batches). Alles andere wie oben: 3000 Läufe, Batch 128, dieselben 2000 Testrätsel.
+
+| Variante | Parameter | Agent (alle Module) | Ø Schritte | Tiefe 7–9, 8 Schritte | Tiefe 10+, 8 Schritte | immer 32 Schritte |
+|---|---:|---:|---:|---:|---:|---:|
+| d=64, 8 Schritte (wie oben) | 134.648 | 83,0 ± 2,8 % | 7,1 | 55 ± 10 % | 20 ± 10 % | 74 ± 15 % |
+| d=128, 8 Schritte | 363.768 | 85,0 ± 0,6 % | 6,6 | 70 ± 6 % | 29 ± 3 % | 74 ± 13 % |
+| d=64, 16 Schritte | 134.648 | 87,0 ± 4,6 % | 6,2 | 72 ± 24 % | 33 ± 20 % | 86 ± 5 % |
+| **d=128, 16 Schritte** | 363.768 | **88,2 ± 0,9 %** | **5,7** | **81 ± 3 %** | **44 ± 7 %** | 85 ± 2 % |
+
+Mittelwert ± Standardabweichung über drei Seeds. "Agent" heißt bis zu 32 Schritte mit Metakognition und
+Regelprüfer.
+
+- **16 Denkschritte im Training bringen am meisten**, bei gleicher Breite 3 bis 4 Punkte. Die langen
+  Schlussketten (Tiefe 10 und mehr) löst d=128 mit 16 Schritten mehr als doppelt so oft wie das
+  ursprüngliche Modell.
+- **Die Breite macht das Training vor allem verlässlich.** Mit d=128 streut das Ergebnis zwischen den
+  Seeds um etwa einen Punkt, mit d=64 um 3 bis 5. Ob d=128 im Mittel auch besser ist als d=64 (bei
+  16 Schritten), lässt sich mit drei Seeds nicht entscheiden: Der beste Einzellauf war d=64 mit
+  16 Schritten (90,8 %), der schlechteste derselben Variante 81,8 %.
+- **Zu langes Nachdenken kann schaden.** Über die geübte Schrittzahl hinaus driftet das Netz manchmal
+  ab. Bei d=64 mit 8 Schritten löst es nach 32 Schritten je nach Seed 57 bis 84 % der Rätsel, in einem
+  Lauf fällt Tiefe 7–9 auf 7 %. Metakognition und Regelprüfer verhindern das, weil sie beim ersten
+  geprüft richtigen Entwurf aufhören. Mit 16 geübten Schritten tritt das Abdriften kaum noch auf.
+- Seed 0 von d=64/8 erreichte hier 86,1 %, der Lauf in der Cloud mit derselben Einstellung 81,4 %.
+  Einzelne Läufe sind also nur auf etwa ±3 Punkte genau.
+
 ## Ergebnisse 6×6
 
 Ein Modell mit 88.991 Parametern, 3000 Läufe (ca. 30 Minuten), 2000 Testrätsel mit 12–28 leeren
@@ -253,9 +284,7 @@ Architektur fehlen, weil Sudoku sie nicht braucht.
   kommt das Selbstlernen heran?
 - **Vergessen provozieren**: Im Schlaf eine Regelvariante üben (zum Beispiel zusätzlich beide
   Diagonalen). Hilft dann Replay?
-- `--schritte 16` beim Training: Lernt das Modell tiefere Schlussketten, sodass Weiterdenken über 8
-  Schritte hinaus wieder etwas bringt?
-- `--d 128` (mit GPU): Wie viel bringt ein breiterer Arbeitsraum bei den tiefen Rätseln?
+- Noch tiefer üben (`--schritte 32`): Wächst der Gewinn bei den langen Schlussketten weiter?
 - Die Metakognition mit `schwelle=0.9` statt `0.5` in [agent.py](mini_kortex/agent.py): weniger
   Fehler, mehr Schritte?
 - Den MLP-Mixer in `modell.py` durch Attention ersetzen und vergleichen.
