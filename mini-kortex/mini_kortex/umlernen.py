@@ -23,15 +23,36 @@ import numpy as np
 
 from .agent import Agent
 from .konsolidierung import schlafen, wach
-from .sudoku import datensatz, gueltig_batch
+from .sudoku import anzahl_loesungen, datensatz, gueltig_batch
 from .training import genauigkeit_pro_schritt
 
 
-def umlernen_daten(n, anzahl_wach, anzahl_test, leer_min, leer_max, seed=0, prozesse=4):
-    """Diagonal-Rätsel zum Erleben und zum Testen, dazu klassische Testrätsel gleicher Schwere."""
+def nur_mehrdeutige(anzahl, rng, **kw):
+    """Diagonal-Rätsel, die nach den *klassischen* Regeln mehrere Lösungen haben.
+
+    Bei diesen hilft die alte Regel allein nicht: Ein Modell, das nur klassisches Sudoku kann, findet
+    höchstens zufällig die Lösung, die auch die Diagonalen erfüllt. Etwa 30 % aller Diagonal-Rätsel
+    sind so. Es wird in Portionen erzeugt und gefiltert, bis genug beisammen sind.
+    """
+    teile_r, teile_l, teile_t, gesamt = [], [], [], 0
+    while gesamt < anzahl:
+        r, l, t = datensatz(max(64, 4 * (anzahl - gesamt)), rng, diagonal=True, **kw)
+        mehrdeutig = np.array([anzahl_loesungen(x) > 1 for x in r])
+        teile_r.append(r[mehrdeutig]), teile_l.append(l[mehrdeutig]), teile_t.append(t[mehrdeutig])
+        gesamt += int(mehrdeutig.sum())
+    return (np.concatenate(teile_r)[:anzahl], np.concatenate(teile_l)[:anzahl], np.concatenate(teile_t)[:anzahl])
+
+
+def umlernen_daten(n, anzahl_wach, anzahl_test, leer_min, leer_max, seed=0, prozesse=4, mehrdeutig=False):
+    """Diagonal-Rätsel zum Erleben und zum Testen, dazu klassische Testrätsel gleicher Schwere.
+
+    `mehrdeutig`: nur Diagonal-Rätsel, die die alte Regel nicht eindeutig löst (siehe `nur_mehrdeutige`).
+    """
     kw = dict(n=n, leer_min=leer_min, leer_max=leer_max, prozesse=prozesse)
-    wach_daten = datensatz(anzahl_wach, np.random.default_rng(seed + 5_000_000), diagonal=True, **kw)
-    diag = datensatz(anzahl_test, np.random.default_rng(seed + 6_000_000), diagonal=True, **kw)
+    erzeugen = (lambda a, rng: nur_mehrdeutige(a, rng, **kw)) if mehrdeutig else \
+        (lambda a, rng: datensatz(a, rng, diagonal=True, **kw))
+    wach_daten = erzeugen(anzahl_wach, np.random.default_rng(seed + 5_000_000))
+    diag = erzeugen(anzahl_test, np.random.default_rng(seed + 6_000_000))
     klass = datensatz(anzahl_test, np.random.default_rng(seed + 7_000_000), **kw)
     return wach_daten, diag, klass
 

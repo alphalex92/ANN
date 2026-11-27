@@ -190,9 +190,10 @@ def befehl_umlernen(args):
     leer_min = LEER_STANDARD[n][0]
     print(f"Diagonal-Rätsel mit {leer_min}–{leer_basis} leeren Feldern (wie im Training). "
           f"Im Schlaf: {schritte} Denkschritte pro Rätsel.")
-    print(f"Erzeuge {args.anzahl_wach} Diagonal-Rätsel zum Erleben und je {args.anzahl_test} zum Testen …")
+    art = "Diagonal-Rätsel, die klassisch mehrdeutig sind," if args.mehrdeutig else "Diagonal-Rätsel"
+    print(f"Erzeuge {args.anzahl_wach} {art} zum Erleben und je {args.anzahl_test} zum Testen …")
     wach_daten, diag, klass = umlernen.umlernen_daten(n, args.anzahl_wach, args.anzahl_test, leer_min, leer_basis,
-                                                      seed=args.seed)
+                                                      seed=args.seed, mehrdeutig=args.mehrdeutig)
     (tr_r, tr_l, _), _ = daten_laden(n, 40_000, 0)
     auswahl = (tr_r == 0).sum(1) <= leer_basis
     alte = (tr_r[auswahl], tr_l[auswahl])
@@ -285,6 +286,8 @@ def main():
     u.add_argument("--anzahl-wach", type=int, default=3000)
     u.add_argument("--anzahl-test", type=int, default=1000)
     u.add_argument("--seed", type=int, default=0, help="andere Diagonal-Rätsel und andere Reihenfolge im Schlaf")
+    u.add_argument("--mehrdeutig", action="store_true",
+                   help="nur Diagonal-Rätsel, die nach den klassischen Regeln mehrere Lösungen haben")
     u.add_argument("--json", help="Ergebnisse zusätzlich als JSON speichern")
     u.set_defaults(f=befehl_umlernen)
 

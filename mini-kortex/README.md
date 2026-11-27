@@ -346,8 +346,28 @@ Regelprüfer), Mittelwert ± Standardabweichung über drei Seeds (je eigenes Mod
   gekostet haben, während der Lehrer sein Training auch auf viele schon gekonnte Rätsel verteilt.
 - In allen 72 Wachphasen hat der Regelprüfer keine einzige falsche Lösung bestätigt.
 
-Einschränkung: Diese neue Regel ist freundlich, weil gut 70 % der Rätsel schon mit der alten lösbar
-sind. Bei einer Regel ohne diese Überschneidung könnte das Selbstlernen scheitern.
+**Grenze des Selbstlernens.** Ist diese Regel nur deshalb lernbar, weil gut 70 % der Rätsel schon
+mit der alten lösbar sind? Mit `umlernen --mehrdeutig` kommen nur Diagonal-Rätsel vor, die nach den
+klassischen Regeln *mehrere* Lösungen haben. Die alte Regel allein reicht dort nie.
+
+| Agent nach Nacht 3, drei Seeds | d=128/16 diagonal | d=128/16 klassisch | d=64/8 diagonal | d=64/8 klassisch |
+|---|---:|---:|---:|---:|
+| vorher | 34,8 ± 0,8 % | 100,0 % | 36,7 ± 0,5 % | 99,9 % |
+| **selbst, mit Replay** | **96,8 ± 0,7 %** | **99,7 ± 0,2 %** | **97,8 ± 1,7 %** | **99,0 ± 0,3 %** |
+| selbst, ohne Replay | 99,8 ± 0,2 % | 19,6 ± 6,8 % | 99,9 ± 0,2 % | 12,0 ± 17,4 % |
+| Lehrer, mit Replay | 96,8 ± 0,2 % | 99,6 ± 0,3 % | 97,5 ± 1,5 % | 99,1 ± 0,4 % |
+| Lehrer, ohne Replay | 99,8 ± 0,2 % | 20,0 ± 8,2 % | 99,9 ± 0,1 % | 10,5 ± 14,5 % |
+
+- **Auch hier trägt das Selbstlernen.** Vorher löst das Modell gut ein Drittel dieser Rätsel: Meist
+  gibt es nur wenige klassische Lösungen, und weil der Regelprüfer falsche Entwürfe zurückweist,
+  denkt der Agent weiter, bis er die richtige trifft. Dieser Halt genügt. Am ersten Tag löst das
+  Modell 35 % selbst, am zweiten 87–89 %, am dritten 95–97 %.
+- **Der Lehrer hilft nur am Anfang**: nach Nacht 1 mit Replay 92,6 statt 89,5 % (d=128/16) bzw.
+  91,9 statt 86,7 % (d=64/8). Nach Nacht 3 ist der Vorsprung verschwunden.
+- Vergessen und Replay wie oben, und wieder keine falsche Lösung mit Prüfsiegel.
+
+Die Grenze ist damit noch nicht gefunden: Ein Drittel richtige Antworten zum Start reicht. Wo das
+Selbstlernen scheitert, müsste eine Regel zeigen, bei der das alte Modell anfangs fast nichts löst.
 
 ## Ergebnisse 6×6
 

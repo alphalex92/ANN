@@ -227,3 +227,11 @@ def test_umlernen_laeuft_und_misst_beide_regeln():
                                                protokoll=lambda *_: None)
     assert len(zeilen) == 2 and set(zeilen[0][1]) == {k for k, _, _ in umlernen.SPALTEN}
     assert all(w["falsch_geprueft"] == 0 for w in wachphasen)
+
+
+def test_mehrdeutige_diagonal_raetsel_brauchen_die_diagonalen():
+    from mini_kortex.umlernen import nur_mehrdeutige
+    r, l, _ = nur_mehrdeutige(5, np.random.default_rng(26), n=9, leer_min=36, leer_max=46)
+    assert len(r) == 5
+    assert all(anzahl_loesungen(x) > 1 and anzahl_loesungen(x, diagonal=True) == 1 for x in r)
+    assert gueltig_batch(l, r, diagonal=True).all()
