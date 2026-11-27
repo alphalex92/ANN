@@ -40,6 +40,7 @@ möglich, würde aber die eigentliche Idee unter sehr viel Rechenarbeit begraben
 | **Werkzeug** | [sudoku.py](mini_kortex/sudoku.py) | (keins) | Exakte Regelprüfung. Kein Lernen, keine Unsicherheit |
 | **Gedächtnis** | [gedaechtnis.py](mini_kortex/gedaechtnis.py) | Hippocampus | Modernes Hopfield-Netz: speichert ein Erlebnis in einem Schritt, ruft über Ähnlichkeit ab |
 | **Konsolidierung** | [konsolidierung.py](mini_kortex/konsolidierung.py) | Schlaf, Hippocampus-Replay | Trainiert das Netz auf eigenen, geprüften Erlebnissen nach, vermischt mit alten Rätseln |
+| **Probieren** | [weltmodell.py](mini_kortex/weltmodell.py) | Vorstellungskraft | Trifft Annahmen und lässt das Netz die Folgen durchdenken |
 | **Steuerung** | [agent.py](mini_kortex/agent.py) | | Verbindet alles zum Ablauf. Jedes Modul lässt sich abschalten |
 
 ## Schnellstart
@@ -391,6 +392,59 @@ Links ohne, rechts mit Hinweis.
   die Streuung. Auch ohne Hinweis kann das Netz die Regeln dann offenbar gut genug auseinanderhalten.
 - Wieder keine einzige falsche Lösung mit Prüfsiegel.
 
+## Ergebnisse: Probieren in Gedanken (das Netz als Weltmodell)
+
+Bei manchen Rätseln reichen einfache Schlüsse nicht, man muss eine Annahme treffen und schauen, wohin
+sie führt. Genau dort war das Modell am schwächsten. Ein **Weltmodell** sagt voraus, was aus einer
+Handlung folgt. In [weltmodell.py](mini_kortex/weltmodell.py) übernimmt das vorhandene Netz diese
+Rolle, ohne neues Training:
+
+1. **Wählen:** Das Werkzeug kennt die erlaubten Ziffern. Gewählt wird das leere Feld mit den wenigsten
+   (mindestens zwei), wie es auch Menschen tun. In der Praxis sind es immer genau zwei.
+2. **Vorstellen:** Für jede Ziffer entsteht ein Gedanken-Rätsel mit dieser Ziffer als Vorgabe. Das Netz
+   denkt es 16 Schritte durch.
+3. **Prüfen:** Ist ein Entwurf regelkonform, ist das Rätsel gelöst. Annahmen, die sofort ein Feld ohne
+   erlaubte Ziffer hinterlassen, fallen weg.
+4. **Bewerten:** Sonst geht es mit der Annahme weiter, der die Metakognition am meisten zutraut, bis zu
+   sechs Annahmen hintereinander.
+
+```bash
+python -m mini_kortex probieren
+```
+
+2000 Testrätsel, Anteil gelöst (immer mit Regelprüfer nach jedem Schritt), Modell d=128/16, Seed 0:
+
+| | gesamt | Tiefe 7–9 | Tiefe 10+ | Probieren | Ø Schritte |
+|---|---:|---:|---:|---:|---:|
+| nur nachdenken, 32 Schritte | 90,0 % | 89,2 % | 58,2 % | 41,8 % | 5,0 |
+| nur nachdenken, 224 Schritte | 90,1 % | 89,2 % | 58,9 % | 41,8 % | 24,1 |
+| **probieren, Metakognition bewertet** | **97,7 %** | **98,3 %** | **95,0 %** | **82,1 %** | 13,1 |
+| probieren, Zufall bewertet | 96,2 % | 95,8 % | 88,7 % | 74,0 % | 14,8 |
+
+Mit d=64/8 ebenso, nur auf niedrigerem Niveau: 86,9 % → 93,7 % gesamt, Probieren 37 % → 65 %.
+
+- **Probieren verdoppelt die Quote bei den Rätseln, die Probieren verlangen** (42 % → 82 %), und hebt
+  Tiefe 10+ von 58 auf 95 %. Und das mit der Hälfte der Rechenzeit, die langes Nachdenken kostet: Mehr
+  Schritte allein bringen nichts mehr.
+- **Die Arbeit macht das Netz als Weltmodell.** Nach einer einzigen richtigen Annahme denkt es die
+  Folgen meist bis zur Lösung durch: 82 der 2000 Rätsel brauchten eine Annahme, 43 zwei, 14 drei.
+  Ein klassischer Löser bräuchte für dieselben Rätsel viele Verzweigungen.
+- **Die Metakognition als Bewertung** bringt 6 bis 8 Punkte bei den schwersten Rätseln gegenüber
+  zufälligem Weitermachen. Sie sagt also brauchbar voraus, welche Annahme trägt.
+- **Die Intuition bei der Zifferwahl spielt kaum eine Rolle**, weil das gewählte Feld immer genau zwei
+  erlaubte Ziffern hat und beide ausprobiert werden. Darf nur eine Ziffer geraten werden, trifft die
+  Intuition etwas besser als der Zufall (Probieren 63 % statt 58 %).
+- Keine falsche Lösung mit Prüfsiegel.
+
+Ein *gelerntes* Weltmodell ist das noch nicht: Es gibt keinen eigenen Teil, der Folgen vorhersagt,
+das Netz löst die Gedanken-Rätsel einfach. Die nächste Stufe wäre, die Suche in den Schlaf zu
+übernehmen: Was nur mit Probieren klappte, wird nachts geübt, bis es ohne geht.
+
+Das Weltmodell aus dem Gesamtentwurf ([ARCHITEKTUR.md](ARCHITEKTUR.md)) ist damit nicht ersetzt.
+Gemeint ist dort ein eigenes Modul, das die Folgen von Handlungen in einer Welt vorhersagt und aus
+dem Vorhersagefehler lernt. Dafür ist die Gitterwelt vorgesehen. Hier zeigt sich nur, dass Planen
+durch Probehandeln im Kopf schon mit dem vorhandenen Netz viel bringt.
+
 ## Ergebnisse 6×6
 
 Ein Modell mit 88.991 Parametern, 3000 Läufe (ca. 30 Minuten), 2000 Testrätsel mit 12–28 leeren
@@ -408,13 +462,16 @@ Denkschritt  3:  0 Felder falsch · Zuversicht 48% · Regelprüfer: gültig ✔
 
 ## Was fehlt (und Ideen zum Weiterprobieren)
 
-Der Prototyp zeigt die Bausteine im Kleinen. Weltmodell, Sprachkern und Wertsystem der großen
-Architektur fehlen, weil Sudoku sie nicht braucht.
+Der Prototyp zeigt die Bausteine im Kleinen. Ein eigenes Weltmodell, Sprachkern und Wertsystem der
+großen Architektur fehlen, weil Sudoku sie nicht braucht. Gesamtentwurf, vorgeschlagene Reihenfolge
+und offene Fragen stehen in [ARCHITEKTUR.md](ARCHITEKTUR.md).
 
 - **Vergessen ohne alte Daten verhindern**: Replay aus dem eigenen Gedächtnis statt aus dem
   Trainingsset, weniger Replay pro Batch, oder wichtige Gewichte schützen (Elastic Weight Consolidation).
 - **Unfreundliche neue Regel**: eine Regel, die die alte kaum überschneidet. Wann scheitert das
   Selbstlernen, und hilft dann der Lehrer?
+- **Probieren im Schlaf**: Lösungen, die nur mit Annahmen gefunden wurden, nachts üben. Wird aus dem
+  Probieren Intuition, wie zuvor aus dem langen Nachdenken?
 - Noch tiefer üben (`--schritte 32`): Wächst der Gewinn bei den langen Schlussketten weiter?
 - Die Metakognition mit `schwelle=0.9` statt `0.5` in [agent.py](mini_kortex/agent.py): weniger
   Fehler, mehr Schritte?

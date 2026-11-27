@@ -1,4 +1,4 @@
-"""Kommandozeile: python -m mini_kortex [--groesse 6|9] trainieren | auswerten | konsolidieren | umlernen | loesen | beispiele"""
+"""Kommandozeile: python -m mini_kortex [--groesse 6|9] trainieren | auswerten | konsolidieren | umlernen | probieren | loesen | beispiele"""
 
 import argparse
 import json
@@ -212,6 +212,43 @@ def befehl_umlernen(args):
         print(f"Ergebnisse als JSON in {args.json}")
 
 
+def befehl_probieren(args):
+    """Probieren in Gedanken (Netz als Weltmodell) gegen reines Nachdenken, nach Denktiefe."""
+    from .weltmodell import nachdenken, probieren
+    n = args.groesse
+    modell = laden(Path(args.modell), geraet=args.geraet) if args.modell else _modell(n, args.geraet)
+    _, (raetsel, loesung, tiefe) = daten_laden(n, 0, args.anzahl)
+    raetsel, loesung, tiefe = raetsel[:args.anzahl], loesung[:args.anzahl], tiefe[:args.anzahl]
+    gruppen = _tiefe_gruppen(n)
+    budget = MAX_SCHRITTE[n] + args.tiefe * args.breite * args.schritte
+    print(f"{len(raetsel)} Testrätsel. Probieren: bis zu {args.tiefe} Annahmen hintereinander, je {args.breite} "
+          f"Ziffern, je {args.schritte} Denkschritte. Zum Vergleich reines Nachdenken mit {budget} Schritten.\n")
+    print(f"  {'':<40} {'gesamt':>7}" + "".join(f"{name:>11}" for name, _ in gruppen) + f"{'Ø Schritte':>12}")
+    zeilen = []
+
+    def zeile(name, geloest, schritte):
+        werte = [geloest.mean()] + [geloest[passt(tiefe)].mean() if passt(tiefe).any() else float("nan")
+                                    for _, passt in gruppen]
+        print(f"  {name:<40} {werte[0]:>7.1%}" + "".join(f"{w:>11.1%}" for w in werte[1:]) + f"{schritte.mean():>12.1f}")
+        zeilen.append([name] + [float(w) for w in werte] + [float(schritte.mean())])
+
+    for s in (MAX_SCHRITTE[n], budget):
+        g, a, *_rest, v = nachdenken(modell, raetsel, s)
+        zeile(f"nur nachdenken, {s} Schritte", g & (a == loesung).all(1), v)
+    for name, bewertung in [("probieren, Metakognition bewertet", "metakognition"),
+                            ("probieren, Zufall bewertet", "zufall")]:
+        e = probieren(modell, raetsel, MAX_SCHRITTE[n], args.tiefe, args.breite, args.schritte, bewertung=bewertung)
+        falsch = int((e["geloest"] & ~(e["antwort"] == loesung).all(1)).sum())
+        zeile(name, e["geloest"], e["schritte"])
+        if bewertung == "metakognition":
+            print(f"  {'':<40} Annahmen bis zur Lösung: {np.bincount(e['annahmen'][e['geloest']]).tolist()}"
+                  f" · falsch, aber geprüft: {falsch}")
+    if args.json:
+        Path(args.json).write_text(json.dumps({"spalten": ["gesamt"] + [g for g, _ in gruppen] + ["schritte"],
+                                               "zeilen": zeilen}, ensure_ascii=False, indent=1))
+        print(f"Ergebnisse als JSON in {args.json}")
+
+
 def befehl_loesen(args):
     """Zeigt Schritt für Schritt, wie das Modell ein Rätsel durchdenkt."""
     n = args.groesse
@@ -295,6 +332,15 @@ def main():
                    help="nur Diagonal-Rätsel, die nach den klassischen Regeln mehrere Lösungen haben")
     u.add_argument("--json", help="Ergebnisse zusätzlich als JSON speichern")
     u.set_defaults(f=befehl_umlernen)
+
+    w = sub.add_parser("probieren", help="Probieren in Gedanken: das Netz als Weltmodell für Annahmen")
+    w.add_argument("--tiefe", type=int, default=6, help="höchstens so viele Annahmen hintereinander")
+    w.add_argument("--breite", type=int, default=2, help="so viele Ziffern pro Annahme ausprobieren")
+    w.add_argument("--schritte", type=int, default=16, help="Denkschritte pro Annahme")
+    w.add_argument("--anzahl", type=int, default=2000)
+    w.add_argument("--modell", help="anderes Modell laden")
+    w.add_argument("--json", help="Ergebnisse zusätzlich als JSON speichern")
+    w.set_defaults(f=befehl_probieren)
 
     l = sub.add_parser("loesen", help="Einem Rätsel beim Nachdenken zuschauen")
     l.add_argument("--leer", type=int, default=None, help="Zahl leerer Felder")

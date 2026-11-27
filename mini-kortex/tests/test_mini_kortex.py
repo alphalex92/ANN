@@ -266,3 +266,23 @@ def test_modell_mit_hinweis_laesst_sich_speichern_und_laden(tmp_path):
     m = mit_hinweis(DenkModell(n=9, d=8))
     speichern(m, tmp_path / "m.pt")
     assert laden(tmp_path / "m.pt").hat_hinweis
+
+
+def test_erlaubte_ziffern_passen_zur_loesung():
+    from mini_kortex.weltmodell import erlaubte_ziffern
+    raetsel, loesungen, _ = datensatz(5, np.random.default_rng(29), n=9)
+    erlaubt = erlaubte_ziffern(raetsel)
+    leer = raetsel == 0
+    # Die richtige Ziffer ist in jedem leeren Feld erlaubt, in vorgegebenen Feldern nichts.
+    assert erlaubt[leer, loesungen[leer] - 1].all()
+    assert not erlaubt[~leer].any()
+
+
+def test_probieren_gibt_nur_gepruefte_loesungen_ab():
+    from mini_kortex.weltmodell import probieren
+    torch.manual_seed(0)
+    raetsel, loesungen, _ = datensatz(6, np.random.default_rng(30), n=9)
+    e = probieren(DenkModell(n=9, d=8), raetsel, basis_schritte=2, tiefe=2, breite=2, schritte=2)
+    assert np.all((e["antwort"] == loesungen).all(1)[e["geloest"]])  # gelöst heißt wirklich richtig
+    assert np.all(e["antwort"][raetsel > 0] == raetsel[raetsel > 0])
+    assert np.all((e["annahmen"] >= 0) == e["geloest"])
