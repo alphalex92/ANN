@@ -1,4 +1,7 @@
+import copy
+
 import numpy as np
+import pytest
 import torch
 
 from mini_kortex.agent import Agent
@@ -159,3 +162,22 @@ def test_training_setzt_beim_zwischenstand_fort(tmp_path):
     fortgesetzt = trainingslauf(DenkModell(d=8), ziehen, 4, zwischenstand=stand, **still)
     for k, v in durchgehend.state_dict().items():
         assert torch.allclose(v, fortgesetzt.state_dict()[k], atol=1e-6), k
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="keine GPU")
+def test_auf_der_gpu_wie_auf_der_cpu(tmp_path):
+    from mini_kortex.training import genauigkeit_pro_schritt, laden, speichern, trainingslauf, ziehen_aus
+    raetsel, loesungen, _ = datensatz(16, np.random.default_rng(15))
+    torch.manual_seed(0)
+    modell = DenkModell(d=16)
+    auf_gpu = copy.deepcopy(modell).cuda()
+    assert auf_gpu.geraet.type == "cuda"
+    cpu = Agent(modell, max_schritte=3).loesen(raetsel, loesungen)
+    gpu = Agent(auf_gpu, max_schritte=3).loesen(raetsel, loesungen)
+    assert (cpu.antwort == gpu.antwort).mean() > 0.99  # bis auf winzige Rundungsunterschiede gleich
+    trainingslauf(auf_gpu, ziehen_aus(raetsel, loesungen, 4), 2, schritte=1, aufwaermen=1, protokoll=lambda *_: None)
+    acc = genauigkeit_pro_schritt(auf_gpu, raetsel, loesungen, 2)
+    assert acc.shape == (2,)
+    pfad = tmp_path / "m.pt"
+    speichern(auf_gpu, pfad)
+    assert laden(pfad).geraet.type == "cpu"  # Datei lädt auch ohne GPU

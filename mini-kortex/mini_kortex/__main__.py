@@ -22,11 +22,20 @@ def modellpfad(n, zusatz=""):
     return Path(f"mini_kortex_{n}{zusatz}.pt")
 
 
-def _modell(n):
+def geraet_waehlen(wunsch):
+    """'auto' nimmt die GPU, wenn PyTorch eine findet, sonst die CPU."""
+    if wunsch == "auto":
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    if wunsch == "cuda" and not torch.cuda.is_available():
+        sys.exit("--geraet cuda: PyTorch findet keine GPU (CUDA). Mit --geraet cpu läuft alles auf der CPU.")
+    return wunsch
+
+
+def _modell(n, geraet="cpu"):
     pfad = modellpfad(n)
     if not pfad.exists():
         sys.exit(f"{pfad} fehlt – erst `python -m mini_kortex --groesse {n} trainieren` ausführen")
-    return laden(pfad)
+    return laden(pfad, geraet=geraet)
 
 
 def _tiefe_gruppen(n):
@@ -45,8 +54,9 @@ def befehl_trainieren(args):
         torch.set_num_threads(args.threads)
     leer_max = args.leer_max if args.leer_max is not None else LEER_TRAINING[n]
     zwischenstand = modellpfad(n, ".zwischenstand")
-    modell, _ = trainieren(n=n, laeufe=args.laeufe, schritte=args.schritte, d=args.d, lernrate=args.lernrate,
-                           leer_max=leer_max, zwischenstand=zwischenstand)
+    modell, _ = trainieren(n=n, laeufe=args.laeufe, batch=args.batch, schritte=args.schritte, d=args.d,
+                           lernrate=args.lernrate, leer_max=leer_max, zwischenstand=zwischenstand,
+                           geraet=args.geraet)
     speichern(modell, modellpfad(n), info={"leer_max": leer_max})
     zwischenstand.unlink(missing_ok=True)
     print(f"\nGespeichert in {modellpfad(n)}")
@@ -58,7 +68,7 @@ def _mittel(werte):
 
 def befehl_auswerten(args):
     n = args.groesse
-    modell = _modell(n)
+    modell = _modell(n, args.geraet)
     lang = MAX_SCHRITTE[n]
     mittel = lang // 4
     _, (raetsel, loesung, tiefe) = daten_laden(n, 0, args.anzahl)
@@ -137,7 +147,7 @@ def befehl_auswerten(args):
 
 def befehl_konsolidieren(args):
     n = args.groesse
-    modell = _modell(n)
+    modell = _modell(n, args.geraet)
     leer_basis = laden(modellpfad(n), nur_info=True).get("leer_max", LEER_TRAINING[n])
     print(f"Modell wurde auf Rätseln mit höchstens {leer_basis} leeren Feldern trainiert.")
     print(f"Erzeuge Rätsel: {args.anzahl_wach} zum Erleben (schwerer), je {args.anzahl_test} zum Testen …")
@@ -162,17 +172,17 @@ def befehl_konsolidieren(args):
 def befehl_loesen(args):
     """Zeigt Schritt für Schritt, wie das Modell ein Rätsel durchdenkt."""
     n = args.groesse
-    modell = laden(Path(args.modell)) if args.modell else _modell(n)
+    modell = laden(Path(args.modell), geraet=args.geraet) if args.modell else _modell(n, args.geraet)
     rng = np.random.default_rng(args.seed)
     leer = args.leer if args.leer is not None else LEER_STANDARD[n][1] - 4
     raetsel, loesung, tiefe = datensatz(1, rng, n=n, leer_min=leer, leer_max=leer)
     print(f"Rätsel ({int((raetsel[0] == 0).sum())} leere Felder, Denktiefe {tiefe[0]}):\n")
     print(als_text(raetsel[0]))
-    r = torch.as_tensor(raetsel)
+    r = torch.as_tensor(raetsel).to(modell.geraet)
     schritte = args.schritte or MAX_SCHRITTE[n]
     with torch.no_grad():
         for s, (y, _z, _roh, logit) in enumerate(modell.denken(r, schritte), start=1):
-            entwurf = modell.ablesen(r, y).numpy()
+            entwurf = modell.ablesen(r, y).cpu().numpy()
             falsch = int((entwurf[0] != loesung[0]).sum())
             ok = gueltig_batch(entwurf, raetsel)[0]
             print(f"\nDenkschritt {s:2d}: {falsch:2d} Felder falsch · Zuversicht {torch.sigmoid(logit)[0]:.0%}"
@@ -194,11 +204,14 @@ def befehl_beispiele(args):
 def main():
     p = argparse.ArgumentParser(prog="python -m mini_kortex", description=__doc__)
     p.add_argument("--groesse", type=int, choices=[6, 9], default=9, help="6×6 oder 9×9 (Standard: 9)")
+    p.add_argument("--geraet", choices=["auto", "cpu", "cuda"], default="auto",
+                   help="worauf gerechnet wird (Standard: auto = GPU, falls vorhanden)")
     sub = p.add_subparsers(dest="befehl", required=True)
 
     t = sub.add_parser("trainieren", help="Modell trainieren und als mini_kortex_<groesse>.pt speichern "
                        "(setzt nach einem Abbruch beim letzten Zwischenstand fort)")
     t.add_argument("--laeufe", type=int, default=3000, help="Anzahl Trainings-Batches")
+    t.add_argument("--batch", type=int, default=128, help="Rätsel pro Trainings-Batch")
     t.add_argument("--schritte", type=int, default=8, help="Denkschritte pro Rätsel beim Training")
     t.add_argument("--d", type=int, default=64, help="Breite der Vektoren im Arbeitsraum")
     t.add_argument("--lernrate", type=float, default=1e-3)
@@ -232,6 +245,7 @@ def main():
     b.set_defaults(f=befehl_beispiele)
 
     args = p.parse_args()
+    args.geraet = geraet_waehlen(args.geraet)
     args.f(args)
 
 

@@ -134,12 +134,18 @@ class DenkModell(nn.Module):
     def anzahl_parameter(self):
         return sum(p.numel() for p in self.parameters())
 
+    @property
+    def geraet(self):
+        """Wo das Modell rechnet (CPU oder GPU). Eingaben müssen dorthin, Ergebnisse zurück."""
+        return next(self.parameters()).device
+
 
 def verlust(modell, raetsel, loesung, schritte):
     """Tiefe Überwachung: Nach *jedem* Denkschritt soll die Antwort schon möglichst stimmen.
 
     Gibt die Liste der Teilverluste zurück (einer pro Schritt), damit das Training nach jedem
-    Schritt sofort zurückrechnen kann.
+    Schritt sofort zurückrechnen kann. Der Anteil gelöster Rätsel bleibt ein Tensor: Ihn in eine
+    Zahl umzuwandeln, würde auf der GPU nach jedem Schritt auf das Ende der Rechnung warten.
     """
     ziel = loesung - 1
     leer = raetsel == 0
@@ -148,4 +154,4 @@ def verlust(modell, raetsel, loesung, schritte):
         with torch.no_grad():
             richtig = (modell.ablesen(raetsel, y) == loesung).all(1).float()
         meta = F.binary_cross_entropy_with_logits(zuversicht, richtig)
-        yield ce + 0.5 * meta, richtig.mean().item()
+        yield ce + 0.5 * meta, richtig.mean()

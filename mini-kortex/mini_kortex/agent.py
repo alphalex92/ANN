@@ -78,11 +78,11 @@ class Agent:
 
         if aktiv.any():
             idx = np.flatnonzero(aktiv)
-            r = torch.as_tensor(raetsel[idx])
+            r = torch.as_tensor(raetsel[idx]).to(self.modell.geraet)
             noch_aktiv = np.ones(len(idx), bool)
             for s, (y, _z, _roh, logit) in enumerate(self.modell.denken(r, self.max_schritte), start=1):
-                entwurf = self.modell.ablesen(r, y).numpy()
-                sicher = torch.sigmoid(logit).numpy()
+                entwurf = self.modell.ablesen(r, y).cpu().numpy()
+                sicher = torch.sigmoid(logit).cpu().numpy()
                 letzter = s == self.max_schritte
 
                 # Metakognition: Bin ich sicher genug, um abzugeben bzw. prüfen zu lassen?

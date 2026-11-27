@@ -82,6 +82,10 @@ Denkschritt, wie viele Felder noch falsch sind, wie sicher sich das Modell ist u
 Regelprüfer sagt. Mit `--modell mini_kortex_9_konsolidiert.pt` schaut man dem ausgeschlafenen
 Modell zu. `beispiele` zeigt ein paar Rätsel, `pytest` startet die Tests.
 
+Findet PyTorch eine GPU, rechnet alles automatisch dort. `--geraet cpu` vor dem Befehl erzwingt die
+CPU, `--geraet cuda` die GPU. Beim Training legt `--batch` fest, wie viele Rätsel ein Lauf enthält
+(Standard 128). Auf der GPU lohnen sich meist größere Batches. Gespeicherte Modelle laden auf beiden.
+
 Mit `--groesse 6` vor dem Befehl läuft alles auf 6×6, das Training dauert dann etwa eine halbe
 Stunde (zum Beispiel `python -m mini_kortex --groesse 6 trainieren`).
 

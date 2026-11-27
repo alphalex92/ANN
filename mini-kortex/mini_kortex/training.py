@@ -38,14 +38,15 @@ def daten_laden(n, anzahl_training, anzahl_test, seed=0, prozesse=4, protokoll=p
 def genauigkeit_pro_schritt(modell, raetsel, loesung, schritte, batch=500):
     """Anteil komplett gelöster Rätsel nach 1, 2, …, `schritte` Denkschritten."""
     modell.eval()
-    treffer = np.zeros(schritte)
+    geraet = modell.geraet
+    treffer = torch.zeros(schritte, device=geraet)
     for i in range(0, len(raetsel), batch):
-        r = torch.as_tensor(raetsel[i:i + batch])
-        l = torch.as_tensor(loesung[i:i + batch])
+        r = torch.as_tensor(raetsel[i:i + batch]).to(geraet)
+        l = torch.as_tensor(loesung[i:i + batch]).to(geraet)
         for s, (y, *_rest) in enumerate(modell.denken(r, schritte)):
-            treffer[s] += (modell.ablesen(r, y) == l).all(1).sum().item()
+            treffer[s] += (modell.ablesen(r, y) == l).all(1).sum()
     modell.train()
-    return treffer / max(1, len(raetsel))
+    return treffer.cpu().numpy() / max(1, len(raetsel))
 
 
 def ziehen_aus(raetsel, loesungen, batch, symmetrien=True):
@@ -84,7 +85,7 @@ def trainingslauf(modell, ziehen, laeufe, schritte=8, lernrate=1e-3, aufwaermen=
     rng = np.random.default_rng(seed)
     erster = 1
     if zwischenstand is not None and Path(zwischenstand).exists():
-        stand = torch.load(zwischenstand, weights_only=False)  # eigene Datei, enthält auch den Zufallszustand
+        stand = torch.load(zwischenstand, weights_only=False, map_location=modell.geraet)  # eigene Datei, enthält auch den Zufallszustand
         modell.load_state_dict(stand["modell"])
         opt.load_state_dict(stand["optimierer"])
         sched.load_state_dict(stand["plan"])
@@ -92,10 +93,11 @@ def trainingslauf(modell, ziehen, laeufe, schritte=8, lernrate=1e-3, aufwaermen=
         erster = stand["lauf"] + 1
         protokoll(f"Setze Training nach Lauf {stand['lauf']} fort (Zwischenstand {zwischenstand})")
     modell.train()
+    geraet = modell.geraet
     start = time.time()
     for lauf in range(erster, laeufe + 1):
         r, l = ziehen(rng)
-        r, l = torch.as_tensor(r), torch.as_tensor(l)
+        r, l = torch.as_tensor(r).to(geraet, non_blocking=True), torch.as_tensor(l).to(geraet, non_blocking=True)
         letzter = 0.0
         for teil, richtig in verlust(modell, r, l, schritte):
             opt.zero_grad()
@@ -105,7 +107,7 @@ def trainingslauf(modell, ziehen, laeufe, schritte=8, lernrate=1e-3, aufwaermen=
             letzter = richtig
         sched.step()
         if pruefen and (lauf % alle == 0 or lauf == laeufe):
-            protokoll(f"Lauf {lauf:5d}  gelöst (Training, letzter Schritt): {letzter:5.1%}   "
+            protokoll(f"Lauf {lauf:5d}  gelöst (Training, letzter Schritt): {float(letzter):5.1%}   "
                       f"{pruefen(lauf)}   ({time.time() - start:.0f} s)")
         if zwischenstand is not None and lauf % alle == 0 and lauf < laeufe:
             # Erst in eine Hilfsdatei schreiben, dann umbenennen: So ist der Zwischenstand nie halb geschrieben.
@@ -119,7 +121,7 @@ def trainingslauf(modell, ziehen, laeufe, schritte=8, lernrate=1e-3, aufwaermen=
 
 def trainieren(n=6, laeufe=3000, batch=128, schritte=8, d=64, innere=3, lernrate=1e-3,
                anzahl_training=40_000, anzahl_test=2_000, leer_max=None, seed=0, protokoll=print,
-               zwischenstand=None):
+               zwischenstand=None, geraet="cpu"):
     """Trainiert ein neues Modell. Mit `leer_max` nur auf Rätseln mit höchstens so vielen Leerfeldern."""
     torch.manual_seed(seed)
     (tr_r, tr_l, _), (te_r, te_l, te_t) = daten_laden(n, anzahl_training, anzahl_test, seed, protokoll=protokoll)
@@ -127,8 +129,8 @@ def trainieren(n=6, laeufe=3000, batch=128, schritte=8, d=64, innere=3, lernrate
         auswahl = (tr_r == 0).sum(1) <= leer_max
         tr_r, tr_l = tr_r[auswahl], tr_l[auswahl]
         protokoll(f"Training nur auf Rätseln mit höchstens {leer_max} leeren Feldern: {len(tr_r)} Stück")
-    modell = DenkModell(n=n, d=d, innere=innere)
-    protokoll(f"Modell: {modell.anzahl_parameter():,} Parameter".replace(",", "."))
+    modell = DenkModell(n=n, d=d, innere=innere).to(geraet)
+    protokoll(f"Modell: {modell.anzahl_parameter():,} Parameter · Batch {batch} · rechnet auf {geraet}".replace(",", "."))
 
     def pruefen(_lauf):
         acc = genauigkeit_pro_schritt(modell, te_r[:500], te_l[:500], schritte)
@@ -141,16 +143,18 @@ def trainieren(n=6, laeufe=3000, batch=128, schritte=8, d=64, innere=3, lernrate
 
 
 def speichern(modell, pfad, info=None):
-    """`info`: zusätzliche Angaben zum Training, z. B. auf welchen Rätseln trainiert wurde."""
-    torch.save({"konfig": modell.konfig, "gewichte": modell.state_dict(), "info": info or {}}, pfad)
+    """`info`: zusätzliche Angaben zum Training, z. B. auf welchen Rätseln trainiert wurde.
+    Gespeichert wird immer in CPU-Form, damit die Datei auch auf Rechnern ohne GPU lädt."""
+    gewichte = {k: v.cpu() for k, v in modell.state_dict().items()}
+    torch.save({"konfig": modell.konfig, "gewichte": gewichte, "info": info or {}}, pfad)
 
 
-def laden(pfad, nur_info=False):
-    daten = torch.load(pfad, weights_only=True)
+def laden(pfad, nur_info=False, geraet="cpu"):
+    daten = torch.load(pfad, weights_only=True, map_location="cpu")
     if nur_info:
         return daten.get("info", {})
     konfig = {"n": 6, **daten["konfig"]}  # ältere Modelle kannten nur 6×6
     modell = DenkModell(**konfig)
     modell.load_state_dict(daten["gewichte"])
-    modell.eval()
+    modell.to(geraet).eval()
     return modell
