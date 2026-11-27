@@ -224,10 +224,9 @@ auf je 1000 anderen schweren und leichten Rätseln, die nie erlebt wurden.
   Regeln funktionieren und sich das Üben nicht widerspricht. Vergessen erwartet man, wenn das Neue
   dem Alten widerspricht.
 
-Zwei Einschränkungen: Das Modell kann nur aus Rätseln lernen, die es mit viel Bedenkzeit schon
-selbst lösen kann. Wirklich Neues (andere Regeln) kann es so nicht lernen. Und es fehlt der
-Vergleich mit einem Modell, das auf denselben schweren Rätseln mit den echten Lösungen trainiert
-wurde. Der würde zeigen, wie nah das Selbstlernen an Lernen mit Lehrer herankommt.
+Eine Einschränkung: Das Modell kann nur aus Rätseln lernen, die es mit viel Bedenkzeit schon
+selbst lösen kann. Wirklich Neues (andere Regeln) kann es so nicht lernen. Wie nah das Selbstlernen
+an Lernen mit Lehrer herankommt, zeigt der Lehrer-Vergleich weiter unten.
 
 ## Ergebnisse auf der GPU: breiter und tiefer
 
@@ -281,6 +280,27 @@ d=64/8 mit 8. Jeweils Seed 0, gemessen auf denselben 1000 schweren, nie erlebten
   nur 82–84 % (d=64/8: 90–92 %): Das breitere Modell verteilt auch leichte Rätsel auf mehrere Schritte.
 - Wieder keine einzige falsche Lösung mit Prüfsiegel, und Replay bringt nach Nacht 1 keinen Vorteil.
 
+**Lehrer-Vergleich.** `konsolidieren --lehrer` übt nachts auf *allen* bisher erlebten schweren
+Rätseln mit den echten Lösungen, auch auf denen, an denen das Modell gescheitert ist. Alles andere
+bleibt gleich: dieselben Rätsel, Replay, Schrittzahl, 300 Läufe pro Nacht und Testmengen.
+
+| Agent, schwere Rätsel | d=128/16 selbst | d=128/16 Lehrer | d=64/8 selbst | d=64/8 Lehrer |
+|---|---:|---:|---:|---:|
+| Vor dem ersten Schlaf | 71,5 % | 71,5 % | 65,7 % | 65,7 % |
+| Nacht 1, mit Replay | 91,1 % | 92,1 % | 87,8 % | 88,9 % |
+| Nacht 2, mit Replay | 91,9 % | 92,9 % | 89,8 % | 90,5 % |
+| Nacht 3, mit Replay | **94,1 %** | **94,2 %** | **91,0 %** | **92,2 %** |
+| geübte Rätsel nach Tag 3 | 2.495 | 3.000 | 2.116 | 3.000 |
+
+- **Das Selbstlernen kommt bis auf 0,1 bis 1,2 Punkte an den Lehrer heran**, also innerhalb der
+  Schwankung zwischen Seeds. Die Lösungen der 500 bis 900 Rätsel, die das Modell selbst nicht
+  schafft, bringen kaum etwas: Das sind die schwersten, und aus ihnen lernt es in 300 Läufen pro
+  Nacht offenbar wenig.
+- Der Lehrer bekommt mehr Beispiele, aber nicht mehr Rechenzeit. Mit längeren Nächten könnte er
+  weiter davonziehen. Und die Rätsel werden nur schwerer, nicht anders: Bei neuen Regeln wäre ein
+  Lehrer vermutlich unverzichtbar.
+- Jeweils nur Seed 0.
+
 ## Ergebnisse 6×6
 
 Ein Modell mit 88.991 Parametern, 3000 Läufe (ca. 30 Minuten), 2000 Testrätsel mit 12–28 leeren
@@ -301,8 +321,6 @@ Denkschritt  3:  0 Felder falsch · Zuversicht 48% · Regelprüfer: gültig ✔
 Der Prototyp zeigt die Bausteine im Kleinen. Weltmodell, Sprachkern und Wertsystem der großen
 Architektur fehlen, weil Sudoku sie nicht braucht.
 
-- **Lehrer-Vergleich**: Dieselben schweren Rätsel mit den echten Lösungen nachtrainieren. Wie nah
-  kommt das Selbstlernen heran?
 - **Vergessen provozieren**: Im Schlaf eine Regelvariante üben (zum Beispiel zusätzlich beide
   Diagonalen). Hilft dann Replay?
 - Noch tiefer üben (`--schritte 32`): Wächst der Gewinn bei den langen Schlussketten weiter?

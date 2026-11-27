@@ -159,10 +159,14 @@ def befehl_konsolidieren(args):
     (tr_r, tr_l, _), _ = daten_laden(n, 40_000, 0)
     auswahl = (tr_r == 0).sum(1) <= leer_basis
     alte = (tr_r[auswahl], tr_l[auswahl])
-    print(f"Testmengen: schwer = mehr als {leer_basis} leere Felder, leicht = höchstens {leer_basis}.\n")
+    print(f"Testmengen: schwer = mehr als {leer_basis} leere Felder, leicht = höchstens {leer_basis}.")
+    if args.lehrer:
+        print("Lehrer-Modus: nachts alle erlebten Rätsel mit den echten Lösungen üben.")
+    print()
     konsolidiert, zeilen, wachphasen = experiment(modell, alte, wach_daten, schwer, leicht, zyklen=args.zyklen,
-                                                  laeufe=args.laeufe, max_schritte=MAX_SCHRITTE[n], schritte=schritte)
-    pfad = modellpfad(n, "_konsolidiert")
+                                                  laeufe=args.laeufe, max_schritte=MAX_SCHRITTE[n], schritte=schritte,
+                                                  lehrer=args.lehrer)
+    pfad = modellpfad(n, "_lehrer" if args.lehrer else "_konsolidiert")
     speichern(konsolidiert, pfad, info={"leer_max": leer_basis, "schritte": schritte})
     print(f"\nKonsolidiertes Modell gespeichert in {pfad}")
     if args.json:
@@ -238,6 +242,8 @@ def main():
                    help="Denkschritte pro Rätsel im Schlaf (Standard: wie im Training, sonst 8)")
     k.add_argument("--anzahl-wach", type=int, default=3000, help="schwere Rätsel zum Erleben, verteilt auf die Tage")
     k.add_argument("--anzahl-test", type=int, default=1000, help="Rätsel pro Testmenge (schwer und leicht)")
+    k.add_argument("--lehrer", action="store_true",
+                   help="Vergleich: nachts alle erlebten Rätsel mit den echten Lösungen üben")
     k.add_argument("--json", help="Ergebnisse zusätzlich als JSON speichern")
     k.set_defaults(f=befehl_konsolidieren)
 

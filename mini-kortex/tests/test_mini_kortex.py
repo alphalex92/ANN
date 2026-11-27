@@ -181,3 +181,16 @@ def test_auf_der_gpu_wie_auf_der_cpu(tmp_path):
     pfad = tmp_path / "m.pt"
     speichern(auf_gpu, pfad)
     assert laden(pfad).geraet.type == "cpu"  # Datei lädt auch ohne GPU
+
+
+def test_lehrer_schlaf_uebt_auch_ungeloeste_raetsel():
+    from mini_kortex.konsolidierung import schlafen
+    torch.manual_seed(0)
+    raetsel, loesungen, _ = datensatz(8, np.random.default_rng(16))
+    modell = DenkModell(d=16)
+    leer = HopfieldGedaechtnis()  # nichts selbst gelöst: Ohne Lehrer fällt der Schlaf aus
+    still = dict(laeufe=2, batch=4, schritte=1, protokoll=lambda *_: None)
+    ohne = schlafen(modell, leer, **still)
+    mit = schlafen(modell, leer, episoden=(raetsel, loesungen), **still)
+    assert all(torch.equal(v, ohne.state_dict()[k]) for k, v in modell.state_dict().items())
+    assert any(not torch.equal(v, mit.state_dict()[k]) for k, v in modell.state_dict().items())

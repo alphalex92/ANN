@@ -18,6 +18,10 @@ Hier heißt das:
 
     MESSEN   Löst das Modell danach *andere*, nie gesehene schwere Rätsel schneller und öfter?
              Und kann es die leichten noch?
+
+Zum Vergleich gibt es einen LEHRER-Modus: Nachts wird auf *allen* bisher erlebten Rätseln mit den
+echten Lösungen geübt, auch auf denen, die das Modell selbst nicht geschafft hat. Der Abstand
+zum Selbstlernen zeigt, wie viel es kostet, nur aus eigener, geprüfter Erfahrung zu lernen.
 """
 
 import copy
@@ -43,15 +47,19 @@ def wach(modell, raetsel, loesungen, gedaechtnis=None, max_schritte=32):
 
 
 def schlafen(modell, gedaechtnis, alte=None, anteil_alt=0.5, mindestens_schritte=2, laeufe=300,
-             batch=128, schritte=8, lernrate=3e-4, seed=0, protokoll=print):
+             batch=128, schritte=8, lernrate=3e-4, seed=0, protokoll=print, episoden=None):
     """Eine Schlafphase. Trainiert eine *Kopie* des Modells und gibt sie zurück.
 
     alte:                (Rätsel, Lösungen) aus dem ursprünglichen Training, fürs Replay
     anteil_alt:          Anteil alter Rätsel pro Batch (0 = nur neue Erlebnisse)
     mindestens_schritte: nur Episoden abspielen, die so viel Nachdenken gekostet haben.
                          Was sofort klappte, muss man nicht üben.
+    episoden:            (Rätsel, Lösungen), die statt des Gedächtnisses geübt werden (Lehrer-Modus)
     """
-    neu_r, neu_l, _ = gedaechtnis.episoden(mindestens_schritte)
+    if episoden is not None:
+        neu_r, neu_l = episoden
+    else:
+        neu_r, neu_l, _ = gedaechtnis.episoden(mindestens_schritte)
     if len(neu_r) == 0:
         protokoll("Keine passenden Episoden im Gedächtnis, Schlaf fällt aus.")
         return copy.deepcopy(modell)
@@ -118,11 +126,12 @@ def experiment_daten(n, leer_basis, anzahl_wach, anzahl_test, seed=0, prozesse=4
 
 
 def experiment(modell, alte, wach_daten, schwer, leicht, zyklen=3, laeufe=300, max_schritte=32,
-               schritte=8, protokoll=print):
+               schritte=8, lehrer=False, protokoll=print):
     """Mehrere Wach-Schlaf-Zyklen; nach dem ersten zusätzlich der Vergleich "Schlaf ohne Replay".
 
     Die Erlebnis-Rätsel werden auf die Zyklen aufgeteilt: Jede Nacht kommt neue Erfahrung dazu.
     `schritte`: Denkschritte pro Rätsel beim nächtlichen Üben, am besten so viele wie im Training.
+    `lehrer`: nachts auf allen bisher erlebten Rätseln mit den echten Lösungen üben statt auf dem Gedächtnis.
     Gibt die Tabellenzeilen und eine Liste mit Kennzahlen pro Wachphase zurück.
     """
     zeilen = [("Vor dem ersten Schlaf", messen(modell, schwer, leicht, max_schritte))]
@@ -132,6 +141,8 @@ def experiment(modell, alte, wach_daten, schwer, leicht, zyklen=3, laeufe=300, m
     portionen = np.array_split(np.arange(len(wach_daten[0])), zyklen)
     for zyklus, idx in enumerate(portionen, start=1):
         gedaechtnis, e = wach(modell, wach_daten[0][idx], wach_daten[1][idx], gedaechtnis, max_schritte)
+        bisher = np.concatenate(portionen[:zyklus])
+        episoden = (wach_daten[0][bisher], wach_daten[1][bisher]) if lehrer else None
         falsch_geprueft = int((e.geprueft & ~e.richtig).sum())
         wachphasen.append({"zyklus": zyklus, "raetsel": len(idx), "geloest": float(e.geprueft.mean()),
                            "schritte": float(e.schritte[e.geprueft].mean()) if e.geprueft.any() else float("nan"),
@@ -140,11 +151,12 @@ def experiment(modell, alte, wach_daten, schwer, leicht, zyklen=3, laeufe=300, m
                   f"(Ø {wachphasen[-1]['schritte']:.1f} Schritte). Gedächtnis: {len(gedaechtnis)} Episoden. "
                   f"Falsch, aber geprüft: {falsch_geprueft}")
         if zyklus == 1:
-            ohne = schlafen(modell, gedaechtnis, alte=None, laeufe=laeufe, schritte=schritte, protokoll=protokoll)
+            ohne = schlafen(modell, gedaechtnis, alte=None, laeufe=laeufe, schritte=schritte, protokoll=protokoll,
+                            episoden=episoden)
             zeilen.append(("Nacht 1, nur neue Erlebnisse", messen(ohne, schwer, leicht, max_schritte)))
             tabelle(zeilen[-1:], protokoll)
         modell = schlafen(modell, gedaechtnis, alte=alte, laeufe=laeufe, schritte=schritte, seed=zyklus,
-                          protokoll=protokoll)
+                          protokoll=protokoll, episoden=episoden)
         zeilen.append((f"Nacht {zyklus}, mit Replay", messen(modell, schwer, leicht, max_schritte)))
         tabelle(zeilen[-1:], protokoll)
     return modell, zeilen, wachphasen
