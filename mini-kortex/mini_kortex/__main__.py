@@ -192,13 +192,16 @@ def befehl_umlernen(args):
           f"Im Schlaf: {schritte} Denkschritte pro Rätsel.")
     art = "Diagonal-Rätsel, die klassisch mehrdeutig sind," if args.mehrdeutig else "Diagonal-Rätsel"
     print(f"Erzeuge {args.anzahl_wach} {art} zum Erleben und je {args.anzahl_test} zum Testen …")
+    if args.hinweis:
+        print("Mit Regel-Hinweis: Das Modell erfährt bei jedem Rätsel, welche Regel gilt.")
     wach_daten, diag, klass = umlernen.umlernen_daten(n, args.anzahl_wach, args.anzahl_test, leer_min, leer_basis,
                                                       seed=args.seed, mehrdeutig=args.mehrdeutig)
     (tr_r, tr_l, _), _ = daten_laden(n, 40_000, 0)
     auswahl = (tr_r == 0).sum(1) <= leer_basis
     alte = (tr_r[auswahl], tr_l[auswahl])
     ergebnis = umlernen.experiment(modell, alte, wach_daten, diag, klass, zyklen=args.zyklen, laeufe=args.laeufe,
-                                   schritte=schritte, max_schritte=MAX_SCHRITTE[n], seed=args.seed)
+                                   schritte=schritte, max_schritte=MAX_SCHRITTE[n], seed=args.seed,
+                                   hinweis=args.hinweis)
     if args.json:
         def zahlen(w):
             return {k: float(v) for k, v in w.items()}
@@ -286,6 +289,8 @@ def main():
     u.add_argument("--anzahl-wach", type=int, default=3000)
     u.add_argument("--anzahl-test", type=int, default=1000)
     u.add_argument("--seed", type=int, default=0, help="andere Diagonal-Rätsel und andere Reihenfolge im Schlaf")
+    u.add_argument("--hinweis", action="store_true",
+                   help="das Modell erfährt bei jedem Rätsel, welche Regel gilt (Regel-Hinweis)")
     u.add_argument("--mehrdeutig", action="store_true",
                    help="nur Diagonal-Rätsel, die nach den klassischen Regeln mehrere Lösungen haben")
     u.add_argument("--json", help="Ergebnisse zusätzlich als JSON speichern")

@@ -33,14 +33,14 @@ from .sudoku import datensatz, varianten
 from .training import genauigkeit_pro_schritt, trainingslauf
 
 
-def wach(modell, raetsel, loesungen, gedaechtnis=None, max_schritte=32, diagonal=False):
+def wach(modell, raetsel, loesungen, gedaechtnis=None, max_schritte=32, diagonal=False, regel=None):
     """Eine Wachphase. Gibt (Gedächtnis, Ergebnis) zurück.
 
     `loesungen` dient nur zur Auswertung. Ins Gedächtnis kommt ausschließlich, was der
     Regelprüfer bestätigt hat.
     """
     agent = Agent(modell, metakognition=True, werkzeug=True, gedaechtnis=True, max_schritte=max_schritte,
-                  diagonal=diagonal)
+                  diagonal=diagonal, regel=regel)
     if gedaechtnis is not None:
         agent.gedaechtnis = gedaechtnis
     ergebnis = agent.loesen(raetsel, loesungen)
@@ -48,7 +48,8 @@ def wach(modell, raetsel, loesungen, gedaechtnis=None, max_schritte=32, diagonal
 
 
 def schlafen(modell, gedaechtnis, alte=None, anteil_alt=0.5, mindestens_schritte=2, laeufe=300,
-             batch=128, schritte=8, lernrate=3e-4, seed=0, protokoll=print, episoden=None, diagonal=False):
+             batch=128, schritte=8, lernrate=3e-4, seed=0, protokoll=print, episoden=None, diagonal=False,
+             regel_neu=None):
     """Eine Schlafphase. Trainiert eine *Kopie* des Modells und gibt sie zurück.
 
     alte:                (Rätsel, Lösungen) aus dem ursprünglichen Training, fürs Replay
@@ -57,6 +58,8 @@ def schlafen(modell, gedaechtnis, alte=None, anteil_alt=0.5, mindestens_schritte
                          Was sofort klappte, muss man nicht üben.
     episoden:            (Rätsel, Lösungen), die statt des Gedächtnisses geübt werden (Lehrer-Modus)
     diagonal:            nur Symmetrien verwenden, die auch die Diagonalregel erhalten
+    regel_neu:           Regel-Hinweis für die neuen Episoden (die alten bekommen 0 = klassisch).
+                         None = Modell ohne Hinweis-Eingang.
     """
     if episoden is not None:
         neu_r, neu_l = episoden
@@ -76,7 +79,10 @@ def schlafen(modell, gedaechtnis, alte=None, anteil_alt=0.5, mindestens_schritte
         if anzahl_alt:
             j = rng.integers(0, len(alte[0]), anzahl_alt)
             r, l = np.concatenate([r, alte[0][j]]), np.concatenate([l, alte[1][j]])
-        return varianten(r, l, rng, diagonal)
+        r, l = varianten(r, l, rng, diagonal)
+        if regel_neu is None:
+            return r, l
+        return r, l, np.array([regel_neu] * anzahl_neu + [0] * anzahl_alt)
 
     kopie = copy.deepcopy(modell)
     return trainingslauf(kopie, ziehen, laeufe, schritte, lernrate, aufwaermen=20, seed=seed, protokoll=protokoll)

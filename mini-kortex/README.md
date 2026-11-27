@@ -369,6 +369,28 @@ klassischen Regeln *mehrere* Lösungen haben. Die alte Regel allein reicht dort 
 Die Grenze ist damit noch nicht gefunden: Ein Drittel richtige Antworten zum Start reicht. Wo das
 Selbstlernen scheitert, müsste eine Regel zeigen, bei der das alte Modell anfangs fast nichts löst.
 
+**Regel-Hinweis.** Liegt das Vergessen nur daran, dass das Netz nicht weiß, welche Regel gilt? Mit
+`umlernen --hinweis` bekommt die Wahrnehmung einen gelernten Vektor pro Regel (0 klassisch,
+1 diagonal), der auf jedes Feld addiert wird, wie ein Kontextsignal. Er startet bei null; das
+umgebaute Modell rechnet zunächst genau wie vorher.
+
+| Agent nach Nacht 3, drei Seeds | d=128/16 diagonal | d=128/16 klassisch | d=64/8 diagonal | d=64/8 klassisch |
+|---|---:|---:|---:|---:|
+| selbst, mit Replay | 98,1 → 98,6 % | 99,5 → 99,5 % | 98,3 → 98,9 % | 99,0 → 99,3 % |
+| selbst, ohne Replay | 99,8 → 99,9 % | **33,3 → 34,0 %** | 99,9 → 99,9 % | **18,9 → 21,2 %** |
+| Lehrer, mit Replay | 96,6 → 97,6 % | 99,8 → 99,6 % | 97,5 → 98,1 % | 99,7 → 99,4 % |
+| Lehrer, ohne Replay | 99,7 → 99,6 % | **49,7 → 48,6 %** | 99,9 → 99,8 % | **20,8 → 21,2 %** |
+
+Links ohne, rechts mit Hinweis.
+
+- **Der Hinweis allein schützt nicht vor dem Vergessen.** Ohne Replay sieht das Netz im Schlaf nie
+  ein Rätsel mit Hinweis 0. Es lernt also nur "Hinweis 1 heißt Diagonalen", nicht "Hinweis 0 heißt
+  keine Diagonalen". Die gemeinsamen Gewichte verschieben sich trotzdem, und bei Hinweis 0 kommt
+  ebenfalls die neue Regel heraus. Ein Kontextsignal hilft nur, wenn beide Kontexte geübt werden.
+- Mit Replay bringt der Hinweis bei der neuen Regel etwa einen halben bis einen Punkt, kaum mehr als
+  die Streuung. Auch ohne Hinweis kann das Netz die Regeln dann offenbar gut genug auseinanderhalten.
+- Wieder keine einzige falsche Lösung mit Prüfsiegel.
+
 ## Ergebnisse 6×6
 
 Ein Modell mit 88.991 Parametern, 3000 Läufe (ca. 30 Minuten), 2000 Testrätsel mit 12–28 leeren
@@ -389,8 +411,8 @@ Denkschritt  3:  0 Felder falsch · Zuversicht 48% · Regelprüfer: gültig ✔
 Der Prototyp zeigt die Bausteine im Kleinen. Weltmodell, Sprachkern und Wertsystem der großen
 Architektur fehlen, weil Sudoku sie nicht braucht.
 
-- **Regel-Hinweis**: Ein Eingang, der sagt, welche Regel gilt (wie ein Kontextsignal im präfrontalen
-  Kortex). Kann das Modell dann beide Regeln ohne Replay halten?
+- **Vergessen ohne alte Daten verhindern**: Replay aus dem eigenen Gedächtnis statt aus dem
+  Trainingsset, weniger Replay pro Batch, oder wichtige Gewichte schützen (Elastic Weight Consolidation).
 - **Unfreundliche neue Regel**: eine Regel, die die alte kaum überschneidet. Wann scheitert das
   Selbstlernen, und hilft dann der Lehrer?
 - Noch tiefer üben (`--schritte 32`): Wächst der Gewinn bei den langen Schlussketten weiter?

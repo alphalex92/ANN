@@ -20,6 +20,7 @@ import numpy as np
 import torch
 
 from .gedaechtnis import HopfieldGedaechtnis
+from .modell import regel_tensor
 from .sudoku import gueltig_batch
 
 
@@ -36,7 +37,7 @@ class Ergebnis:
 
 class Agent:
     def __init__(self, modell, metakognition=True, werkzeug=True, gedaechtnis=True,
-                 max_schritte=16, schwelle=0.5, diagonal=False):
+                 max_schritte=16, schwelle=0.5, diagonal=False, regel=None):
         self.modell = modell.eval()
         self.metakognition = metakognition
         self.werkzeug = werkzeug
@@ -44,6 +45,7 @@ class Agent:
         self.max_schritte = max_schritte
         self.schwelle = schwelle
         self.diagonal = diagonal  # Regelprüfer für Diagonal-Sudoku
+        self.regel = regel        # Regel-Hinweis ans Netz (0 = klassisch, 1 = diagonal), falls es einen hat
 
     def _aus_gedaechtnis(self, raetsel):
         """Versucht, jedes Rätsel aus dem Gedächtnis zu beantworten. Gibt (Antworten, Treffer) zurück."""
@@ -80,8 +82,9 @@ class Agent:
         if aktiv.any():
             idx = np.flatnonzero(aktiv)
             r = torch.as_tensor(raetsel[idx]).to(self.modell.geraet)
+            regel = regel_tensor(self.regel, len(idx), self.modell.geraet)
             noch_aktiv = np.ones(len(idx), bool)
-            for s, (y, _z, _roh, logit) in enumerate(self.modell.denken(r, self.max_schritte), start=1):
+            for s, (y, _z, _roh, logit) in enumerate(self.modell.denken(r, self.max_schritte, regel), start=1):
                 entwurf = self.modell.ablesen(r, y).cpu().numpy()
                 sicher = torch.sigmoid(logit).cpu().numpy()
                 letzter = s == self.max_schritte

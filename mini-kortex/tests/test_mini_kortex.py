@@ -235,3 +235,34 @@ def test_mehrdeutige_diagonal_raetsel_brauchen_die_diagonalen():
     assert len(r) == 5
     assert all(anzahl_loesungen(x) > 1 and anzahl_loesungen(x, diagonal=True) == 1 for x in r)
     assert gueltig_batch(l, r, diagonal=True).all()
+
+
+def test_regel_hinweis_startet_wirkungslos_und_wird_gelernt():
+    from mini_kortex.konsolidierung import schlafen
+    from mini_kortex.modell import mit_hinweis
+    torch.manual_seed(0)
+    raetsel, loesungen, _ = datensatz(8, np.random.default_rng(27), n=9, diagonal=True)
+    alt = DenkModell(n=9, d=8)
+    neu = mit_hinweis(alt)
+    assert neu.hat_hinweis and not alt.hat_hinweis
+    r = torch.as_tensor(raetsel)
+    vorher = [y for y, *_ in alt.denken(r, 2)]
+    nachher = [y for y, *_ in neu.denken(r, 2, torch.ones(len(r), dtype=torch.long))]
+    assert all(torch.allclose(a, b) for a, b in zip(vorher, nachher))  # Hinweis startet bei null
+    g = HopfieldGedaechtnis()
+    for x, l in zip(raetsel, loesungen):
+        g.speichern(x, l, 3)
+    kr, kl, _ = datensatz(8, np.random.default_rng(28), n=9)
+    gelernt = schlafen(neu, g, alte=(kr, kl), laeufe=3, batch=8, schritte=1, diagonal=True, regel_neu=1,
+                       protokoll=lambda *_: None)
+    assert gelernt.wahrnehmung.hinweis.weight.abs().sum() > 0
+    e = Agent(gelernt, max_schritte=2, diagonal=True, regel=1).loesen(raetsel, loesungen)
+    assert not np.any(e.geprueft & ~e.richtig)
+
+
+def test_modell_mit_hinweis_laesst_sich_speichern_und_laden(tmp_path):
+    from mini_kortex.modell import mit_hinweis
+    from mini_kortex.training import laden, speichern
+    m = mit_hinweis(DenkModell(n=9, d=8))
+    speichern(m, tmp_path / "m.pt")
+    assert laden(tmp_path / "m.pt").hat_hinweis

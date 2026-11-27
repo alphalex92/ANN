@@ -15,6 +15,10 @@ Drei Fragen:
 
 Verglichen werden vier Bedingungen: selbst oder mit Lehrer (echte Lösungen für alle erlebten
 Diagonal-Rätsel), jeweils mit und ohne Replay alter klassischer Rätsel.
+
+Mit `hinweis=True` bekommt das Modell zusätzlich einen **Regel-Hinweis**: Es erfährt bei jedem Rätsel,
+ob es klassisch (0) oder diagonal (1) ist. Liegt das Vergessen ohne Replay nur daran, dass das Netz
+die beiden Regeln nicht auseinanderhalten kann?
 """
 
 import copy
@@ -23,6 +27,7 @@ import numpy as np
 
 from .agent import Agent
 from .konsolidierung import schlafen, wach
+from .modell import mit_hinweis, regel_tensor
 from .sudoku import anzahl_loesungen, datensatz, gueltig_batch
 from .training import genauigkeit_pro_schritt
 
@@ -57,7 +62,7 @@ def umlernen_daten(n, anzahl_wach, anzahl_test, leer_min, leer_max, seed=0, proz
     return wach_daten, diag, klass
 
 
-def entwuerfe(modell, raetsel, schritte, batch=500):
+def entwuerfe(modell, raetsel, schritte, batch=500, regel=None):
     """Die Antwort des Netzes nach genau `schritte` Denkschritten (ohne Agent)."""
     import torch
     modell.eval()
@@ -65,21 +70,25 @@ def entwuerfe(modell, raetsel, schritte, batch=500):
     with torch.no_grad():
         for i in range(0, len(raetsel), batch):
             r = torch.as_tensor(raetsel[i:i + batch]).to(modell.geraet)
-            for s, (y, *_rest) in enumerate(modell.denken(r, schritte), start=1):
+            hinweis = regel_tensor(regel, len(r), modell.geraet)
+            for s, (y, *_rest) in enumerate(modell.denken(r, schritte, hinweis), start=1):
                 if s == schritte:
                     teile.append(modell.ablesen(r, y).cpu().numpy())
     return np.concatenate(teile)
 
 
 def messen(modell, diag, klass, max_schritte=32, schritte=8):
-    """Kennzahlen auf Diagonal- und klassischen Testrätseln (beide nie erlebt)."""
-    acc_d = genauigkeit_pro_schritt(modell, diag[0], diag[1], schritte)
-    acc_k = genauigkeit_pro_schritt(modell, klass[0], klass[1], schritte)
-    agent_d = Agent(modell, gedaechtnis=False, max_schritte=max_schritte, diagonal=True).loesen(diag[0], diag[1])
-    agent_k = Agent(modell, gedaechtnis=False, max_schritte=max_schritte).loesen(klass[0], klass[1])
+    """Kennzahlen auf Diagonal- und klassischen Testrätseln (beide nie erlebt).
+    Hat das Modell einen Hinweis-Eingang, bekommt es den richtigen Hinweis (1 diagonal, 0 klassisch)."""
+    rd, rk = (1, 0) if modell.hat_hinweis else (None, None)
+    acc_d = genauigkeit_pro_schritt(modell, diag[0], diag[1], schritte, regel=rd)
+    acc_k = genauigkeit_pro_schritt(modell, klass[0], klass[1], schritte, regel=rk)
+    agent_d = Agent(modell, gedaechtnis=False, max_schritte=max_schritte, diagonal=True,
+                    regel=rd).loesen(diag[0], diag[1])
+    agent_k = Agent(modell, gedaechtnis=False, max_schritte=max_schritte, regel=rk).loesen(klass[0], klass[1])
     # Woran scheitert das Modell bei den Diagonal-Rätseln? Ist der Entwurf eine *klassisch* gültige
     # Lösung, hat es die alte Regel angewandt und nur die Diagonalen ignoriert.
-    e = entwuerfe(modell, diag[0], schritte)
+    e = entwuerfe(modell, diag[0], schritte, regel=rd)
     alte_regel = gueltig_batch(e, diag[0]) & ~(e == diag[1]).all(1)
     return {
         "diag_8": acc_d[-1],
@@ -106,15 +115,17 @@ def tabelle(zeilen, protokoll=print):
 
 
 def bedingung(modell, alte, wach_daten, diag, klass, lehrer, replay, zyklen=3, laeufe=300, schritte=8,
-              max_schritte=32, seed=0, protokoll=print):
-    """Mehrere Wach-Schlaf-Zyklen auf Diagonal-Rätseln. Gibt (Modell, Zeilen, Wachphasen) zurück."""
-    modell = copy.deepcopy(modell)
+              max_schritte=32, seed=0, hinweis=False, protokoll=print):
+    """Mehrere Wach-Schlaf-Zyklen auf Diagonal-Rätseln. Gibt (Modell, Zeilen, Wachphasen) zurück.
+    `hinweis`: das Modell vorher um einen Regel-Hinweis-Eingang erweitern (startet bei null)."""
+    modell = mit_hinweis(modell) if hinweis else copy.deepcopy(modell)
+    regel = 1 if hinweis else None
     zeilen, wachphasen = [], []
     gedaechtnis = None
     portionen = np.array_split(np.arange(len(wach_daten[0])), zyklen)
     for zyklus, idx in enumerate(portionen, start=1):
         gedaechtnis, e = wach(modell, wach_daten[0][idx], wach_daten[1][idx], gedaechtnis, max_schritte,
-                              diagonal=True)
+                              diagonal=True, regel=regel)
         falsch_geprueft = int((e.geprueft & ~e.richtig).sum())
         wachphasen.append({"zyklus": zyklus, "geloest": float(e.geprueft.mean()), "episoden": len(gedaechtnis),
                            "falsch_geprueft": falsch_geprueft})
@@ -123,7 +134,8 @@ def bedingung(modell, alte, wach_daten, diag, klass, lehrer, replay, zyklen=3, l
         bisher = np.concatenate(portionen[:zyklus])
         episoden = (wach_daten[0][bisher], wach_daten[1][bisher]) if lehrer else None
         modell = schlafen(modell, gedaechtnis, alte=alte if replay else None, laeufe=laeufe, schritte=schritte,
-                          seed=1000 * seed + zyklus, protokoll=protokoll, episoden=episoden, diagonal=True)
+                          seed=1000 * seed + zyklus, protokoll=protokoll, episoden=episoden, diagonal=True,
+                          regel_neu=regel)
         zeilen.append((f"Nacht {zyklus}", messen(modell, diag, klass, max_schritte)))
         tabelle(zeilen[-1:], protokoll)
     return modell, zeilen, wachphasen
@@ -138,7 +150,7 @@ BEDINGUNGEN = [
 
 
 def experiment(modell, alte, wach_daten, diag, klass, zyklen=3, laeufe=300, schritte=8, max_schritte=32,
-               seed=0, protokoll=print):
+               seed=0, hinweis=False, protokoll=print):
     """Alle vier Bedingungen, jeweils vom selben Ausgangsmodell. Gibt ein Ergebnis-Dict zurück."""
     start = messen(modell, diag, klass, max_schritte)
     protokoll("Ausgangsmodell (kennt nur klassisches Sudoku):")
@@ -147,7 +159,7 @@ def experiment(modell, alte, wach_daten, diag, klass, zyklen=3, laeufe=300, schr
     for name, lehrer, replay in BEDINGUNGEN:
         protokoll(f"\n=== {name} ===")
         _, zeilen, wachphasen = bedingung(modell, alte, wach_daten, diag, klass, lehrer, replay, zyklen, laeufe,
-                                          schritte, max_schritte, seed, protokoll)
+                                          schritte, max_schritte, seed, hinweis, protokoll)
         ergebnis["bedingungen"][name] = {"zeilen": zeilen, "wachphasen": wachphasen}
     protokoll("\nZusammenfassung nach der letzten Nacht:")
     tabelle([("vorher", start)] + [(name, b["zeilen"][-1][1]) for name, b in ergebnis["bedingungen"].items()],

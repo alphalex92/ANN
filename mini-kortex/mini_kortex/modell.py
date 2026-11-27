@@ -41,15 +41,28 @@ class MixerBlock(nn.Module):
 
 
 class Wahrnehmung(nn.Module):
-    """Rätsel (Ziffern 0–n pro Feld) → Vektor pro Feld. 0 = leer bekommt einen eigenen Vektor."""
+    """Rätsel (Ziffern 0–n pro Feld) → Vektor pro Feld. 0 = leer bekommt einen eigenen Vektor.
 
-    def __init__(self, d, n):
+    Mit `regeln` > 1 gibt es zusätzlich einen **Regel-Hinweis**: einen gelernten Vektor pro Regel
+    (0 = klassisch, 1 = diagonal), der auf jedes Feld addiert wird. Er sagt dem Netz, welche Regel
+    gilt, so wie ein Kontextsignal im präfrontalen Kortex. Er startet bei null, ein Modell ohne
+    Hinweis verhält sich nach dem Umbau also genau wie vorher.
+    """
+
+    def __init__(self, d, n, regeln=1):
         super().__init__()
         self.ziffer = nn.Embedding(n + 1, d)
         self.position = nn.Parameter(torch.randn(n * n, d) * 0.02)
+        self.hinweis = None
+        if regeln > 1:
+            self.hinweis = nn.Embedding(regeln, d)
+            nn.init.zeros_(self.hinweis.weight)
 
-    def forward(self, raetsel):
-        return self.ziffer(raetsel) + self.position
+    def forward(self, raetsel, regel=None):
+        x = self.ziffer(raetsel) + self.position
+        if self.hinweis is not None and regel is not None:
+            x = x + self.hinweis(regel)[:, None, :]
+        return x
 
 
 class Denkkern(nn.Module):
@@ -104,11 +117,13 @@ class DenkModell(nn.Module):
     """Alle neuronalen Teile zusammen. Die Steuerung (wann aufhören, Gedächtnis, Werkzeug)
     liegt in `agent.py`, damit man sie getrennt ein- und ausschalten kann."""
 
-    def __init__(self, n=6, d=64, schichten=2, innere=3):
+    def __init__(self, n=6, d=64, schichten=2, innere=3, regeln=1):
         super().__init__()
         self.n = n
         self.konfig = dict(n=n, d=d, schichten=schichten, innere=innere)
-        self.wahrnehmung = Wahrnehmung(d, n)
+        if regeln > 1:
+            self.konfig["regeln"] = regeln
+        self.wahrnehmung = Wahrnehmung(d, n, regeln)
         self.kern = Denkkern(d, n * n, schichten, innere)
         self.ausgabe = nn.Linear(d, n)  # pro Feld: Rohwerte für die Ziffern 1–n
         self.metakognition = Metakognition(d)
@@ -118,13 +133,17 @@ class DenkModell(nn.Module):
         geraten = self.ausgabe(y).argmax(-1) + 1
         return torch.where(raetsel > 0, raetsel, geraten)
 
-    def denken(self, raetsel, schritte):
-        """Liefert nach jedem Denkschritt (Rohwerte, Zuversicht-Logit). Für Training und Analyse."""
-        y, z = self.kern.anfang(self.wahrnehmung(raetsel))
+    def denken(self, raetsel, schritte, regel=None):
+        """Liefert nach jedem Denkschritt (Rohwerte, Zuversicht-Logit). Für Training und Analyse.
+
+        `regel`: Regel-Hinweis pro Rätsel, Tensor (B,) mit 0 = klassisch, 1 = diagonal. Nur wirksam,
+        wenn das Modell einen Hinweis-Eingang hat (siehe `mit_hinweis`).
+        """
+        y, z = self.kern.anfang(self.wahrnehmung(raetsel, regel))
         for _ in range(schritte):
             # Die Wahrnehmung wird pro Schritt neu berechnet (kostet fast nichts), damit jeder
             # Schritt einen eigenen Rechengraphen hat und für sich trainiert werden kann.
-            x = self.wahrnehmung(raetsel)
+            x = self.wahrnehmung(raetsel, regel)
             y, z = self.kern.denkschritt(x, y, z)
             yield y, z, self.ausgabe(y), self.metakognition(y)
             # Damit das Training nicht durch alle Schritte gleichzeitig zurückrechnen muss,
@@ -135,12 +154,34 @@ class DenkModell(nn.Module):
         return sum(p.numel() for p in self.parameters())
 
     @property
+    def hat_hinweis(self):
+        return self.wahrnehmung.hinweis is not None
+
+    @property
     def geraet(self):
         """Wo das Modell rechnet (CPU oder GPU). Eingaben müssen dorthin, Ergebnisse zurück."""
         return next(self.parameters()).device
 
 
-def verlust(modell, raetsel, loesung, schritte):
+def mit_hinweis(modell, regeln=2):
+    """Baut ein Modell ohne Regel-Hinweis in eines mit Hinweis-Eingang um. Alle Gewichte bleiben,
+    der neue Eingang startet bei null. Danach rechnet das Modell zunächst genau wie vorher."""
+    neu = DenkModell(**{**modell.konfig, "regeln": regeln}).to(modell.geraet)
+    fehlend, _ = neu.load_state_dict(modell.state_dict(), strict=False)
+    assert fehlend == ["wahrnehmung.hinweis.weight"], fehlend
+    return neu.train(modell.training)
+
+
+def regel_tensor(regel, anzahl, geraet):
+    """Regel-Hinweis als Tensor (B,): aus einer Zahl (gilt für alle) oder einem Array pro Rätsel."""
+    if regel is None:
+        return None
+    if isinstance(regel, int):
+        return torch.full((anzahl,), regel, dtype=torch.long, device=geraet)
+    return torch.as_tensor(regel, dtype=torch.long).to(geraet)
+
+
+def verlust(modell, raetsel, loesung, schritte, regel=None):
     """Tiefe Überwachung: Nach *jedem* Denkschritt soll die Antwort schon möglichst stimmen.
 
     Gibt die Liste der Teilverluste zurück (einer pro Schritt), damit das Training nach jedem
@@ -149,7 +190,7 @@ def verlust(modell, raetsel, loesung, schritte):
     """
     ziel = loesung - 1
     leer = raetsel == 0
-    for y, z, rohwerte, zuversicht in modell.denken(raetsel, schritte):
+    for y, z, rohwerte, zuversicht in modell.denken(raetsel, schritte, regel):
         ce = F.cross_entropy(rohwerte[leer], ziel[leer])
         with torch.no_grad():
             richtig = (modell.ablesen(raetsel, y) == loesung).all(1).float()

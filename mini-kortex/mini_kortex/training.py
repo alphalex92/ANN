@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from .modell import DenkModell, verlust
+from .modell import DenkModell, regel_tensor, verlust
 from .sudoku import datensatz, varianten
 
 
@@ -35,15 +35,16 @@ def daten_laden(n, anzahl_training, anzahl_test, seed=0, prozesse=4, protokoll=p
 
 
 @torch.no_grad()
-def genauigkeit_pro_schritt(modell, raetsel, loesung, schritte, batch=500):
-    """Anteil komplett gelöster Rätsel nach 1, 2, …, `schritte` Denkschritten."""
+def genauigkeit_pro_schritt(modell, raetsel, loesung, schritte, batch=500, regel=None):
+    """Anteil komplett gelöster Rätsel nach 1, 2, …, `schritte` Denkschritten.
+    `regel`: Regel-Hinweis für alle Rätsel (0 oder 1), nur bei Modellen mit Hinweis-Eingang."""
     modell.eval()
     geraet = modell.geraet
     treffer = torch.zeros(schritte, device=geraet)
     for i in range(0, len(raetsel), batch):
         r = torch.as_tensor(raetsel[i:i + batch]).to(geraet)
         l = torch.as_tensor(loesung[i:i + batch]).to(geraet)
-        for s, (y, *_rest) in enumerate(modell.denken(r, schritte)):
+        for s, (y, *_rest) in enumerate(modell.denken(r, schritte, regel_tensor(regel, len(r), geraet))):
             treffer[s] += (modell.ablesen(r, y) == l).all(1).sum()
     modell.train()
     return treffer.cpu().numpy() / max(1, len(raetsel))
@@ -66,7 +67,8 @@ def ziehen_aus(raetsel, loesungen, batch, symmetrien=True):
 
 def trainingslauf(modell, ziehen, laeufe, schritte=8, lernrate=1e-3, aufwaermen=200, seed=0,
                   pruefen=None, alle=250, protokoll=print, zwischenstand=None):
-    """Die eigentliche Trainingsschleife. `ziehen(rng)` liefert pro Lauf einen Batch (Rätsel, Lösungen).
+    """Die eigentliche Trainingsschleife. `ziehen(rng)` liefert pro Lauf einen Batch (Rätsel, Lösungen),
+    bei Modellen mit Regel-Hinweis auch (Rätsel, Lösungen, Regel pro Rätsel).
 
     `pruefen(lauf)` darf einen Text zurückgeben, der alle `alle` Läufe ins Protokoll geschrieben wird.
     `zwischenstand`: Datei, in die alle `alle` Läufe der komplette Trainingszustand geschrieben wird.
@@ -96,10 +98,11 @@ def trainingslauf(modell, ziehen, laeufe, schritte=8, lernrate=1e-3, aufwaermen=
     geraet = modell.geraet
     start = time.time()
     for lauf in range(erster, laeufe + 1):
-        r, l = ziehen(rng)
+        r, l, *regel = ziehen(rng)
         r, l = torch.as_tensor(r).to(geraet, non_blocking=True), torch.as_tensor(l).to(geraet, non_blocking=True)
+        regel = regel_tensor(regel[0], len(r), geraet) if regel else None
         letzter = 0.0
-        for teil, richtig in verlust(modell, r, l, schritte):
+        for teil, richtig in verlust(modell, r, l, schritte, regel):
             opt.zero_grad()
             teil.backward()
             torch.nn.utils.clip_grad_norm_(modell.parameters(), 1.0)
