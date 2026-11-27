@@ -4,6 +4,8 @@
     9×9: Kästen aus 3 Zeilen × 3 Spalten, Ziffern 1–9, 81 Felder
 
 In jeder Zeile, jeder Spalte und jedem Kasten kommt jede Ziffer genau einmal vor.
+Als zweite Regelvariante gibt es **Diagonal-Sudoku** (`diagonal=True`): Zusätzlich müssen auch die
+beiden Hauptdiagonalen jede Ziffer genau einmal enthalten.
 Eine 0 steht für ein leeres Feld. Ein Gitter ist ein flaches Array mit n·n Einträgen;
 die Größe ergibt sich aus der Länge (36 → 6×6, 81 → 9×9).
 
@@ -23,10 +25,11 @@ KASTEN = {6: (2, 3), 9: (3, 3)}  # Größe → (Zeilen, Spalten) eines Kastens
 class Feld:
     """Die Geometrie eines Spielfelds: welche Felder gehören zusammen?"""
 
-    def __init__(self, n):
+    def __init__(self, n, diagonal=False):
         if n not in KASTEN:
             raise ValueError(f"Unbekannte Größe {n}, möglich: {sorted(KASTEN)}")
         self.n = n
+        self.diagonal = diagonal
         self.felder = n * n
         self.kz, self.ks = KASTEN[n]
         self.alle = (1 << n) - 1  # Bitmaske: alle Ziffern noch möglich
@@ -37,36 +40,40 @@ class Feld:
             for br in range(0, n, self.kz)
             for bc in range(0, n, self.ks)
         ]
-        self.einheiten = zeilen + spalten + kaesten
+        diagonalen = [[i * n + i for i in range(n)], [i * n + n - 1 - i for i in range(n)]] if diagonal else []
+        self.einheiten = zeilen + spalten + kaesten + diagonalen
         self.einheiten_array = np.array(self.einheiten)
         # Für jedes Feld: Nummer seiner Zeile, Spalte und seines Kastens.
         self.zeile = [i // n for i in range(self.felder)]
         self.spalte = [i % n for i in range(self.felder)]
         self.kasten = [(i // n) // self.kz * (n // self.ks) + (i % n) // self.ks for i in range(self.felder)]
+        # Liegt das Feld auf der Haupt- bzw. Nebendiagonale (nur bei Diagonal-Sudoku von Belang)?
+        self.auf_d1 = [diagonal and i // n == i % n for i in range(self.felder)]
+        self.auf_d2 = [diagonal and i // n + i % n == n - 1 for i in range(self.felder)]
 
 
 @lru_cache(maxsize=None)
-def feld(n):
-    return Feld(n)
+def feld(n, diagonal=False):
+    return Feld(n, diagonal)
 
 
-def feld_fuer(gitter):
+def feld_fuer(gitter, diagonal=False):
     """Das passende Spielfeld zu einem Gitter (oder einer Batch von Gittern)."""
     laenge = np.asarray(gitter).shape[-1]
     n = int(round(laenge ** 0.5))
     if n * n != laenge:
         raise ValueError(f"Gitter mit {laenge} Einträgen ist kein Quadrat")
-    return feld(n)
+    return feld(n, diagonal)
 
 
 # ---------------------------------------------------------------------------
 # Werkzeug: exakte Regelprüfung
 # ---------------------------------------------------------------------------
 
-def ist_gueltige_loesung(gitter, raetsel=None):
+def ist_gueltige_loesung(gitter, raetsel=None, diagonal=False):
     """True, wenn das Gitter vollständig und regelkonform ist (und zu den Vorgaben passt)."""
     g = np.asarray(gitter).reshape(-1)
-    f = feld_fuer(g)
+    f = feld_fuer(g, diagonal)
     if not np.all((g >= 1) & (g <= f.n)):
         return False
     if any(len(set(g[e].tolist())) != f.n for e in f.einheiten):
@@ -78,23 +85,23 @@ def ist_gueltige_loesung(gitter, raetsel=None):
     return True
 
 
-def gueltig_batch(gitter, raetsel):
+def gueltig_batch(gitter, raetsel, diagonal=False):
     """Wie `ist_gueltige_loesung`, aber für viele Gitter auf einmal (Form (B, n·n)) → (B,) bool."""
     g = np.asarray(gitter)
     r = np.asarray(raetsel)
-    f = feld_fuer(g)
-    gruppen = g[:, f.einheiten_array]  # (B, 3n, n)
-    one_hot = gruppen[..., None] == np.arange(1, f.n + 1)  # (B, 3n, n, n)
+    f = feld_fuer(g, diagonal)
+    gruppen = g[:, f.einheiten_array]  # (B, Gruppen, n)
+    one_hot = gruppen[..., None] == np.arange(1, f.n + 1)  # (B, Gruppen, n, n)
     jede_ziffer_einmal = (one_hot.sum(2) == 1).all((1, 2))
     passt_zu_vorgaben = ((r == 0) | (r == g)).all(1)
     return jede_ziffer_einmal & passt_zu_vorgaben
 
 
-def regelverstoesse(gitter):
+def regelverstoesse(gitter, diagonal=False):
     """Anzahl doppelter Ziffern über alle Gruppen. 0 heißt: kein Widerspruch (Leerfelder zählen nicht)."""
     g = np.asarray(gitter).reshape(-1)
     fehler = 0
-    for e in feld_fuer(g).einheiten:
+    for e in feld_fuer(g, diagonal).einheiten:
         werte = g[e][g[e] > 0]
         fehler += len(werte) - len(set(werte.tolist()))
     return fehler
@@ -105,56 +112,96 @@ def regelverstoesse(gitter):
 # ---------------------------------------------------------------------------
 
 def _masken(g, f):
-    """Welche Ziffern sind in jeder Zeile, Spalte, jedem Kasten schon belegt? (als Bitmasken)"""
-    zm, sm, km = [0] * f.n, [0] * f.n, [0] * f.n
+    """Welche Ziffern sind in jeder Zeile, Spalte, jedem Kasten (und jeder Diagonale) schon belegt?
+
+    Als Bitmasken. `dm` hat zwei Einträge: Haupt- und Nebendiagonale (bleiben 0 ohne Diagonalregel).
+    """
+    zm, sm, km, dm = [0] * f.n, [0] * f.n, [0] * f.n, [0, 0]
     for i, v in enumerate(g):
         if v:
             bit = 1 << (v - 1)
             zm[f.zeile[i]] |= bit
             sm[f.spalte[i]] |= bit
             km[f.kasten[i]] |= bit
-    return zm, sm, km
+            if f.auf_d1[i]:
+                dm[0] |= bit
+            if f.auf_d2[i]:
+                dm[1] |= bit
+    return zm, sm, km, dm
 
 
-def anzahl_loesungen(raetsel, grenze=2):
+def _kandidaten(i, zm, sm, km, dm, f):
+    """Bitmaske der Ziffern, die in Feld i noch erlaubt sind."""
+    belegt = zm[f.zeile[i]] | sm[f.spalte[i]] | km[f.kasten[i]]
+    if f.auf_d1[i]:
+        belegt |= dm[0]
+    if f.auf_d2[i]:
+        belegt |= dm[1]
+    return f.alle & ~belegt
+
+
+def anzahl_loesungen(raetsel, grenze=2, diagonal=False, rng=None, ausgabe=None):
     """Zählt Lösungen per Backtracking, bricht bei `grenze` ab.
 
-    Belegte Ziffern werden pro Zeile, Spalte und Kasten als Bitmaske mitgeführt. So kostet
-    die Frage "welche Ziffern passen hier noch?" nur drei ODER-Verknüpfungen.
+    Belegte Ziffern werden pro Zeile, Spalte und Kasten (und Diagonale) als Bitmaske mitgeführt.
+    So kostet die Frage "welche Ziffern passen hier noch?" nur ein paar ODER-Verknüpfungen.
+
+    `rng`: Kandidaten in zufälliger Reihenfolge probieren (zum Erzeugen zufälliger Gitter).
+    `ausgabe`: Liste, an die die erste gefundene Lösung angehängt wird.
     """
     g = [int(v) for v in np.asarray(raetsel).reshape(-1)]
-    f = feld_fuer(g)
-    zm, sm, km = _masken(g, f)
+    f = feld_fuer(g, diagonal)
+    zm, sm, km, dm = _masken(g, f)
     leer = [i for i in range(f.felder) if g[i] == 0]
-    Z, S, K, ALLE = f.zeile, f.spalte, f.kasten, f.alle
+    Z, S, K, D1, D2, ALLE = f.zeile, f.spalte, f.kasten, f.auf_d1, f.auf_d2, f.alle
 
     def suche():
         # Das leere Feld mit den wenigsten Kandidaten zuerst: das hält den Suchbaum klein.
         bestes, beste_maske, beste_zahl = -1, 0, 99
         for i in leer:
             if g[i] == 0:
-                m = ALLE & ~(zm[Z[i]] | sm[S[i]] | km[K[i]])
+                belegt = zm[Z[i]] | sm[S[i]] | km[K[i]]
+                if D1[i]:
+                    belegt |= dm[0]
+                if D2[i]:
+                    belegt |= dm[1]
+                m = ALLE & ~belegt
                 k = m.bit_count()
                 if k < beste_zahl:
                     bestes, beste_maske, beste_zahl = i, m, k
                     if k <= 1:
                         break
         if bestes < 0:
+            if ausgabe is not None and not ausgabe:
+                ausgabe.append(list(g))
             return 1
         gefunden = 0
-        z, s, k = Z[bestes], S[bestes], K[bestes]
+        z, s, k, d1, d2 = Z[bestes], S[bestes], K[bestes], D1[bestes], D2[bestes]
+        bits = []
         m = beste_maske
         while m:
             bit = m & -m
             m ^= bit
+            bits.append(bit)
+        if rng is not None:
+            bits = [bits[j] for j in rng.permutation(len(bits))]
+        for bit in bits:
             g[bestes] = bit.bit_length()
             zm[z] |= bit
             sm[s] |= bit
             km[k] |= bit
+            if d1:
+                dm[0] |= bit
+            if d2:
+                dm[1] |= bit
             gefunden += suche()
             zm[z] ^= bit
             sm[s] ^= bit
             km[k] ^= bit
+            if d1:
+                dm[0] ^= bit
+            if d2:
+                dm[1] ^= bit
             g[bestes] = 0
             if gefunden >= grenze:
                 break
@@ -163,7 +210,7 @@ def anzahl_loesungen(raetsel, grenze=2):
     return suche()
 
 
-def denktiefe(raetsel):
+def denktiefe(raetsel, diagonal=False):
     """Wie viele Runden logischen Schließens braucht ein Mensch (mindestens)?
 
     Pro Runde werden gleichzeitig alle Felder ausgefüllt, die sich direkt ergeben:
@@ -173,12 +220,11 @@ def denktiefe(raetsel):
     Gibt 0 zurück, wenn diese einfachen Regeln nicht reichen und man probieren müsste.
     """
     g = [int(v) for v in np.asarray(raetsel).reshape(-1)]
-    f = feld_fuer(g)
+    f = feld_fuer(g, diagonal)
     runden = 0
     while 0 in g:
-        zm, sm, km = _masken(g, f)
-        kand = {i: f.alle & ~(zm[f.zeile[i]] | sm[f.spalte[i]] | km[f.kasten[i]])
-                for i in range(f.felder) if g[i] == 0}
+        zm, sm, km, dm = _masken(g, f)
+        kand = {i: _kandidaten(i, zm, sm, km, dm, f) for i in range(f.felder) if g[i] == 0}
         neu = {}
         for i, m in kand.items():
             if m and m & (m - 1) == 0:
@@ -201,14 +247,60 @@ def denktiefe(raetsel):
 # Symmetrien: aus einem Rätsel viele gleichwertige machen
 # ---------------------------------------------------------------------------
 
-def zufaellige_symmetrie(n, rng):
+def _diagonal_permutation(f, rng):
+    """Eine Umordnung der Zeilen (und genauso der Spalten), die Bänder und beide Diagonalen erhält.
+
+    Wendet man dieselbe Permutation σ auf Zeilen und Spalten an, bleibt die Hauptdiagonale erhalten.
+    Die Nebendiagonale bleibt erhalten, wenn σ mit dem Spiegeln vertauscht: σ(n-1-i) = n-1-σ(i).
+    Erlaubt sind also: äußere Bänder tauschen, im ersten Band beliebig umordnen (das letzte Band
+    spiegelbildlich mit), im mittleren Band nur die beiden äußeren Zeilen tauschen.
+    """
+    n, b = f.n, f.kz
+    baender = n // b
+    paare = [(k, baender - 1 - k) for k in range(baender // 2)]  # Band k ↔ Spiegelband
+    ziel = list(range(baender))
+    for k, spiegel in paare:
+        if rng.random() < 0.5:
+            ziel[k], ziel[spiegel] = ziel[spiegel], ziel[k]
+    sigma = [0] * n
+    for k, spiegel in paare:
+        innen = rng.permutation(b)
+        for z in range(b):
+            sigma[k * b + z] = ziel[k] * b + innen[z]
+            sigma[spiegel * b + (b - 1 - z)] = ziel[spiegel] * b + (b - 1 - innen[z])
+    if baender % 2:  # mittleres Band: es bleibt an seinem Platz
+        m = baender // 2
+        innen = list(range(b))
+        if rng.random() < 0.5:
+            innen = innen[::-1]
+        for z in range(b):
+            sigma[m * b + z] = m * b + innen[z]
+    return np.array(sigma)
+
+
+def zufaellige_symmetrie(n, rng, diagonal=False):
     """Eine zufällige Umordnung, die die Sudoku-Regeln erhält.
 
     Erlaubt sind: Ziffern umbenennen, Zeilen innerhalb eines Bandes tauschen, Bänder tauschen,
     Spalten innerhalb eines Stapels tauschen, Stapel tauschen und (bei quadratischen Kästen)
     spiegeln an der Diagonale. Rückgabe: (Feld-Reihenfolge, Ziffern-Tabelle).
+
+    Bei Diagonal-Sudoku sind nur die Umordnungen erlaubt, die auch beide Diagonalen erhalten
+    (siehe `_diagonal_permutation`), dazu Transponieren und Spiegeln an der senkrechten Achse.
+    Diese Umordnungen erhalten auch die klassischen Regeln.
     """
     f = feld(n)
+    if diagonal:
+        if f.kz != f.ks:
+            raise ValueError("Diagonal-Sudoku gibt es hier nur mit quadratischen Kästen (9×9)")
+        sigma = _diagonal_permutation(f, rng)
+        reihenfolge = sigma[:, None] * n + sigma[None, :]
+        if rng.random() < 0.5:
+            reihenfolge = reihenfolge.T
+        if rng.random() < 0.5:
+            reihenfolge = reihenfolge[:, ::-1]  # spiegeln: tauscht die beiden Diagonalen
+        ziffern = np.concatenate([[0], rng.permutation(n) + 1])
+        return reihenfolge.reshape(-1), ziffern
     baender = rng.permutation(n // f.kz)
     zeilen = np.array([b * f.kz + z for b in baender for z in rng.permutation(f.kz)])
     stapel = rng.permutation(n // f.ks)
@@ -220,13 +312,17 @@ def zufaellige_symmetrie(n, rng):
     return reihenfolge.reshape(-1), ziffern
 
 
-def varianten(raetsel, loesungen, rng):
-    """Wendet auf jedes Paar (Rätsel, Lösung) eine eigene zufällige Symmetrie an."""
+def varianten(raetsel, loesungen, rng, diagonal=False):
+    """Wendet auf jedes Paar (Rätsel, Lösung) eine eigene zufällige Symmetrie an.
+
+    Mit `diagonal=True` nur Symmetrien, die auch die Diagonalregel erhalten. Die passen ebenso für
+    klassische Rätsel, deshalb darf ein Batch beide Sorten gemischt enthalten.
+    """
     raetsel, loesungen = np.asarray(raetsel), np.asarray(loesungen)
     n = feld_fuer(raetsel).n
     neu_r, neu_l = np.empty_like(raetsel), np.empty_like(loesungen)
     for i in range(len(raetsel)):
-        reihenfolge, ziffern = zufaellige_symmetrie(n, rng)
+        reihenfolge, ziffern = zufaellige_symmetrie(n, rng, diagonal)
         neu_r[i] = ziffern[raetsel[i][reihenfolge]]
         neu_l[i] = ziffern[loesungen[i][reihenfolge]]
     return neu_r, neu_l
@@ -236,8 +332,16 @@ def varianten(raetsel, loesungen, rng):
 # Rätsel erzeugen
 # ---------------------------------------------------------------------------
 
-def zufaelliges_gitter(rng, n=6):
-    """Ein zufälliges vollständiges Gitter: festes gültiges Muster + zufällige Symmetrie."""
+def zufaelliges_gitter(rng, n=6, diagonal=False):
+    """Ein zufälliges vollständiges Gitter: festes gültiges Muster + zufällige Symmetrie.
+
+    Für Diagonal-Sudoku gibt es kein so einfaches Muster: Dort füllt der Löser ein leeres Gitter
+    und probiert die Ziffern in zufälliger Reihenfolge.
+    """
+    if diagonal:
+        ergebnis = []
+        anzahl_loesungen(np.zeros(n * n, np.int64), grenze=1, diagonal=True, rng=rng, ausgabe=ergebnis)
+        return np.array(ergebnis[0], np.int64)
     f = feld(n)
     r = np.arange(n)[:, None]
     c = np.arange(n)[None, :]
@@ -246,9 +350,9 @@ def zufaelliges_gitter(rng, n=6):
     return ziffern[muster[reihenfolge]]
 
 
-def raetsel_erzeugen(rng, leer_ziel, n=6):
+def raetsel_erzeugen(rng, leer_ziel, n=6, diagonal=False):
     """Entfernt Ziffern, solange das Rätsel eindeutig lösbar bleibt (höchstens `leer_ziel` Stück)."""
-    loesung = zufaelliges_gitter(rng, n)
+    loesung = zufaelliges_gitter(rng, n, diagonal)
     raetsel = loesung.copy()
     leer = 0
     for i in rng.permutation(n * n):
@@ -256,7 +360,7 @@ def raetsel_erzeugen(rng, leer_ziel, n=6):
             break
         alt = raetsel[i]
         raetsel[i] = 0
-        if anzahl_loesungen(raetsel) == 1:
+        if anzahl_loesungen(raetsel, diagonal=diagonal) == 1:
             leer += 1
         else:
             raetsel[i] = alt
@@ -268,18 +372,18 @@ LEER_STANDARD = {6: (12, 28), 9: (30, 58)}
 
 
 def _datensatz_teil(args):
-    anzahl, seed, n, leer_min, leer_max = args
+    anzahl, seed, n, leer_min, leer_max, diagonal = args
     rng = np.random.default_rng(seed)
     raetsel, loesungen, tiefe = [], [], []
     for _ in range(anzahl):
-        r, l = raetsel_erzeugen(rng, int(rng.integers(leer_min, leer_max + 1)), n)
+        r, l = raetsel_erzeugen(rng, int(rng.integers(leer_min, leer_max + 1)), n, diagonal)
         raetsel.append(r)
         loesungen.append(l)
-        tiefe.append(denktiefe(r))
+        tiefe.append(denktiefe(r, diagonal))
     return raetsel, loesungen, tiefe
 
 
-def datensatz(anzahl, rng, n=6, leer_min=None, leer_max=None, prozesse=1):
+def datensatz(anzahl, rng, n=6, leer_min=None, leer_max=None, prozesse=1, diagonal=False):
     """`anzahl` Rätsel mit gleichmäßig verteilter Zahl leerer Felder.
 
     Mit `prozesse` > 1 wird auf mehrere CPU-Kerne verteilt (lohnt sich bei 9×9).
@@ -291,7 +395,7 @@ def datensatz(anzahl, rng, n=6, leer_min=None, leer_max=None, prozesse=1):
     stuecke = max(1, min(prozesse, anzahl)) if prozesse > 1 else 1
     groessen = [anzahl // stuecke + (i < anzahl % stuecke) for i in range(stuecke)]
     seeds = rng.integers(0, 2**63, stuecke)
-    auftraege = [(g, int(s), n, leer_min, leer_max) for g, s in zip(groessen, seeds)]
+    auftraege = [(g, int(s), n, leer_min, leer_max, diagonal) for g, s in zip(groessen, seeds)]
     if stuecke == 1:
         teile = [_datensatz_teil(auftraege[0])]
     else:

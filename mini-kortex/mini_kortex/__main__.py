@@ -1,4 +1,4 @@
-"""Kommandozeile: python -m mini_kortex [--groesse 6|9] trainieren | auswerten | konsolidieren | loesen | beispiele"""
+"""Kommandozeile: python -m mini_kortex [--groesse 6|9] trainieren | auswerten | konsolidieren | umlernen | loesen | beispiele"""
 
 import argparse
 import json
@@ -177,6 +177,37 @@ def befehl_konsolidieren(args):
         print(f"Ergebnisse als JSON in {args.json}")
 
 
+def befehl_umlernen(args):
+    """Neue Regel (Diagonal-Sudoku): vier Bedingungen vom selben Ausgangsmodell."""
+    from . import umlernen
+    n = args.groesse
+    if n != 9:
+        sys.exit("umlernen gibt es nur für 9×9")
+    modell = _modell(n, args.geraet)
+    info = laden(modellpfad(n), nur_info=True)
+    leer_basis = info.get("leer_max", LEER_TRAINING[n])
+    schritte = args.schritte or info.get("schritte", 8)
+    leer_min = LEER_STANDARD[n][0]
+    print(f"Diagonal-Rätsel mit {leer_min}–{leer_basis} leeren Feldern (wie im Training). "
+          f"Im Schlaf: {schritte} Denkschritte pro Rätsel.")
+    print(f"Erzeuge {args.anzahl_wach} Diagonal-Rätsel zum Erleben und je {args.anzahl_test} zum Testen …")
+    wach_daten, diag, klass = umlernen.umlernen_daten(n, args.anzahl_wach, args.anzahl_test, leer_min, leer_basis,
+                                                      seed=args.seed)
+    (tr_r, tr_l, _), _ = daten_laden(n, 40_000, 0)
+    auswahl = (tr_r == 0).sum(1) <= leer_basis
+    alte = (tr_r[auswahl], tr_l[auswahl])
+    ergebnis = umlernen.experiment(modell, alte, wach_daten, diag, klass, zyklen=args.zyklen, laeufe=args.laeufe,
+                                   schritte=schritte, max_schritte=MAX_SCHRITTE[n], seed=args.seed)
+    if args.json:
+        def zahlen(w):
+            return {k: float(v) for k, v in w.items()}
+        Path(args.json).write_text(json.dumps({
+            "vorher": zahlen(ergebnis["vorher"]),
+            "bedingungen": {name: {"zeilen": [[z, zahlen(w)] for z, w in b["zeilen"]], "wachphasen": b["wachphasen"]}
+                            for name, b in ergebnis["bedingungen"].items()}}, ensure_ascii=False, indent=1))
+        print(f"Ergebnisse als JSON in {args.json}")
+
+
 def befehl_loesen(args):
     """Zeigt Schritt für Schritt, wie das Modell ein Rätsel durchdenkt."""
     n = args.groesse
@@ -246,6 +277,16 @@ def main():
                    help="Vergleich: nachts alle erlebten Rätsel mit den echten Lösungen üben")
     k.add_argument("--json", help="Ergebnisse zusätzlich als JSON speichern")
     k.set_defaults(f=befehl_konsolidieren)
+
+    u = sub.add_parser("umlernen", help="Neue Regel (Diagonal-Sudoku): selbst/Lehrer × mit/ohne Replay")
+    u.add_argument("--zyklen", type=int, default=3)
+    u.add_argument("--laeufe", type=int, default=300, help="Trainingsläufe pro Nacht")
+    u.add_argument("--schritte", type=int, default=None, help="Denkschritte im Schlaf (Standard: wie im Training)")
+    u.add_argument("--anzahl-wach", type=int, default=3000)
+    u.add_argument("--anzahl-test", type=int, default=1000)
+    u.add_argument("--seed", type=int, default=0, help="andere Diagonal-Rätsel und andere Reihenfolge im Schlaf")
+    u.add_argument("--json", help="Ergebnisse zusätzlich als JSON speichern")
+    u.set_defaults(f=befehl_umlernen)
 
     l = sub.add_parser("loesen", help="Einem Rätsel beim Nachdenken zuschauen")
     l.add_argument("--leer", type=int, default=None, help="Zahl leerer Felder")

@@ -194,3 +194,36 @@ def test_lehrer_schlaf_uebt_auch_ungeloeste_raetsel():
     mit = schlafen(modell, leer, episoden=(raetsel, loesungen), **still)
     assert all(torch.equal(v, ohne.state_dict()[k]) for k, v in modell.state_dict().items())
     assert any(not torch.equal(v, mit.state_dict()[k]) for k, v in modell.state_dict().items())
+
+
+def test_diagonal_raetsel_sind_eindeutig_und_brauchen_die_neue_regel():
+    raetsel, loesungen, _ = datensatz(10, np.random.default_rng(17), n=9, leer_min=40, leer_max=46, diagonal=True)
+    assert gueltig_batch(loesungen, raetsel, diagonal=True).all()
+    assert all(anzahl_loesungen(r, diagonal=True) == 1 for r in raetsel)
+    kr, kl, _ = datensatz(10, np.random.default_rng(18), n=9)
+    assert not gueltig_batch(kl, kr, diagonal=True).any()  # klassische Lösungen verletzen die Diagonalen
+
+
+def test_diagonal_symmetrien_erhalten_beide_regeln():
+    from mini_kortex.sudoku import varianten
+    raetsel, loesungen, tiefe = datensatz(5, np.random.default_rng(19), n=9, diagonal=True)
+    vr, vl = varianten(raetsel, loesungen, np.random.default_rng(20), diagonal=True)
+    assert gueltig_batch(vl, vr, diagonal=True).all()
+    assert [denktiefe(r, diagonal=True) for r in vr] == tiefe.tolist()
+    kr, kl, _ = datensatz(5, np.random.default_rng(21), n=9)
+    vr, vl = varianten(kr, kl, np.random.default_rng(22), diagonal=True)
+    assert gueltig_batch(vl, vr).all()
+
+
+def test_umlernen_laeuft_und_misst_beide_regeln():
+    from mini_kortex import umlernen
+    torch.manual_seed(0)
+    wach_daten = datensatz(6, np.random.default_rng(23), n=9, diagonal=True)
+    diag = datensatz(4, np.random.default_rng(24), n=9, diagonal=True)
+    klass = datensatz(4, np.random.default_rng(25), n=9)
+    modell = DenkModell(n=9, d=8)
+    _, zeilen, wachphasen = umlernen.bedingung(modell, klass[:2], wach_daten, diag, klass, lehrer=True, replay=True,
+                                               zyklen=2, laeufe=2, schritte=1, max_schritte=2,
+                                               protokoll=lambda *_: None)
+    assert len(zeilen) == 2 and set(zeilen[0][1]) == {k for k, _, _ in umlernen.SPALTEN}
+    assert all(w["falsch_geprueft"] == 0 for w in wachphasen)

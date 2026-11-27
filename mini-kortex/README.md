@@ -301,6 +301,54 @@ bleibt gleich: dieselben Rätsel, Replay, Schrittzahl, 300 Läufe pro Nacht und 
   Lehrer vermutlich unverzichtbar.
 - Jeweils nur Seed 0.
 
+## Ergebnisse: eine neue Regel (Diagonal-Sudoku)
+
+Bisher wurden die Rätsel nur schwerer, die Regeln blieben gleich. Jetzt ändert sich die Welt: Beim
+**Diagonal-Sudoku** müssen zusätzlich beide Hauptdiagonalen jede Ziffer genau einmal enthalten. Der
+Regelprüfer kennt die neue Regel, das Netz nicht, und im Rätsel steht kein Hinweis, welche Regel gilt.
+Ein klassisch trainiertes Modell erlebt drei Tage lang je 1000 Diagonal-Rätsel (30–46 leere Felder,
+so schwer wie im Training) und schläft dazwischen. Gemessen wird auf je 1000 nie erlebten Diagonal-
+und klassischen Rätseln.
+
+```bash
+python -m mini_kortex umlernen --seed 0
+```
+
+Etwa 70 % der Diagonal-Rätsel sind schon nach den klassischen Regeln eindeutig, die löst das alte
+Modell sofort. Bei den übrigen 30 % gibt es eine klassisch gültige Lösung ab, die die Diagonalen
+verletzt. Umgekehrt verletzt jede Lösung eines klassischen Rätsels die Diagonalen: Das Neue
+widerspricht dem Alten.
+
+Nach drei Nächten, Agent (bis 32 Schritte mit Metakognition und Diagonal- bzw. klassischem
+Regelprüfer), Mittelwert ± Standardabweichung über drei Seeds (je eigenes Modell und eigene Rätsel):
+
+| Bedingung | d=128/16 diagonal | d=128/16 klassisch | d=64/8 diagonal | d=64/8 klassisch |
+|---|---:|---:|---:|---:|
+| vorher | 69,7 ± 0,8 % | 100,0 % | 71,0 ± 1,0 % | 99,9 % |
+| **selbst, mit Replay** | **98,1 ± 0,5 %** | **99,5 ± 0,2 %** | **98,3 ± 1,6 %** | **99,0 ± 0,4 %** |
+| selbst, ohne Replay | 99,8 ± 0,1 % | 33,3 ± 13,0 % | 99,9 ± 0,2 % | 18,9 ± 28,1 % |
+| Lehrer, mit Replay | 96,6 ± 0,7 % | 99,8 ± 0,1 % | 97,5 ± 1,4 % | 99,7 ± 0,2 % |
+| Lehrer, ohne Replay | 99,7 ± 0,2 % | 49,7 ± 14,1 % | 99,9 ± 0,1 % | 20,8 ± 27,0 % |
+
+- **Die neue Regel lernt das Modell selbst.** Die 70 %, die es mit der alten Regel richtig löst,
+  bestätigt der Regelprüfer, und alle erfüllen die Diagonalen. Daraus lernt das Netz die Diagonalen
+  nebenbei mit und löst jeden Tag mehr der neuen Rätsel selbst (bei d=128/16, Seed 0: 74, 90, 96 %).
+  Einen Lehrer braucht es nicht.
+- **Ohne Replay wird kräftig vergessen**, in jedem Lauf. Das Modell wendet die Diagonalen jetzt auch
+  auf klassische Rätsel an. Wie stark es vergisst, schwankt sehr: Beim kleinen Modell bleiben 3 bis
+  51 %, beim breiten 19 bis 65 %.
+- **Replay schützt verlässlich.** In allen sechs Läufen bleibt die alte Regel bei 98,7–99,9 %, und die
+  neue kostet es nur 1,5 bis 2 Punkte. Bei schwereren Rätseln derselben Regel brachte Replay nichts.
+  Hier ist es entscheidend. Das passt zur Theorie der komplementären Lernsysteme: Replay schützt
+  dann, wenn das Neue dem Alten widerspricht.
+- **Mit Replay ist der Lehrer etwas schlechter als das Selbstlernen**, bei beiden Modellen in allen
+  drei Seeds. Vermutlich, weil das Selbstlernen nur Episoden übt, die mindestens 2 Denkschritte
+  gekostet haben, während der Lehrer sein Training auch auf viele schon gekonnte Rätsel verteilt.
+- In allen 72 Wachphasen hat der Regelprüfer keine einzige falsche Lösung bestätigt.
+
+Einschränkung: Diese neue Regel ist freundlich, weil gut 70 % der Rätsel schon mit der alten lösbar
+sind. Bei einer Regel ohne diese Überschneidung könnte das Selbstlernen scheitern.
+
 ## Ergebnisse 6×6
 
 Ein Modell mit 88.991 Parametern, 3000 Läufe (ca. 30 Minuten), 2000 Testrätsel mit 12–28 leeren
@@ -321,8 +369,10 @@ Denkschritt  3:  0 Felder falsch · Zuversicht 48% · Regelprüfer: gültig ✔
 Der Prototyp zeigt die Bausteine im Kleinen. Weltmodell, Sprachkern und Wertsystem der großen
 Architektur fehlen, weil Sudoku sie nicht braucht.
 
-- **Vergessen provozieren**: Im Schlaf eine Regelvariante üben (zum Beispiel zusätzlich beide
-  Diagonalen). Hilft dann Replay?
+- **Regel-Hinweis**: Ein Eingang, der sagt, welche Regel gilt (wie ein Kontextsignal im präfrontalen
+  Kortex). Kann das Modell dann beide Regeln ohne Replay halten?
+- **Unfreundliche neue Regel**: eine Regel, die die alte kaum überschneidet. Wann scheitert das
+  Selbstlernen, und hilft dann der Lehrer?
 - Noch tiefer üben (`--schritte 32`): Wächst der Gewinn bei den langen Schlussketten weiter?
 - Die Metakognition mit `schwelle=0.9` statt `0.5` in [agent.py](mini_kortex/agent.py): weniger
   Fehler, mehr Schritte?

@@ -33,13 +33,14 @@ from .sudoku import datensatz, varianten
 from .training import genauigkeit_pro_schritt, trainingslauf
 
 
-def wach(modell, raetsel, loesungen, gedaechtnis=None, max_schritte=32):
+def wach(modell, raetsel, loesungen, gedaechtnis=None, max_schritte=32, diagonal=False):
     """Eine Wachphase. Gibt (Gedächtnis, Ergebnis) zurück.
 
     `loesungen` dient nur zur Auswertung. Ins Gedächtnis kommt ausschließlich, was der
     Regelprüfer bestätigt hat.
     """
-    agent = Agent(modell, metakognition=True, werkzeug=True, gedaechtnis=True, max_schritte=max_schritte)
+    agent = Agent(modell, metakognition=True, werkzeug=True, gedaechtnis=True, max_schritte=max_schritte,
+                  diagonal=diagonal)
     if gedaechtnis is not None:
         agent.gedaechtnis = gedaechtnis
     ergebnis = agent.loesen(raetsel, loesungen)
@@ -47,7 +48,7 @@ def wach(modell, raetsel, loesungen, gedaechtnis=None, max_schritte=32):
 
 
 def schlafen(modell, gedaechtnis, alte=None, anteil_alt=0.5, mindestens_schritte=2, laeufe=300,
-             batch=128, schritte=8, lernrate=3e-4, seed=0, protokoll=print, episoden=None):
+             batch=128, schritte=8, lernrate=3e-4, seed=0, protokoll=print, episoden=None, diagonal=False):
     """Eine Schlafphase. Trainiert eine *Kopie* des Modells und gibt sie zurück.
 
     alte:                (Rätsel, Lösungen) aus dem ursprünglichen Training, fürs Replay
@@ -55,6 +56,7 @@ def schlafen(modell, gedaechtnis, alte=None, anteil_alt=0.5, mindestens_schritte
     mindestens_schritte: nur Episoden abspielen, die so viel Nachdenken gekostet haben.
                          Was sofort klappte, muss man nicht üben.
     episoden:            (Rätsel, Lösungen), die statt des Gedächtnisses geübt werden (Lehrer-Modus)
+    diagonal:            nur Symmetrien verwenden, die auch die Diagonalregel erhalten
     """
     if episoden is not None:
         neu_r, neu_l = episoden
@@ -74,7 +76,7 @@ def schlafen(modell, gedaechtnis, alte=None, anteil_alt=0.5, mindestens_schritte
         if anzahl_alt:
             j = rng.integers(0, len(alte[0]), anzahl_alt)
             r, l = np.concatenate([r, alte[0][j]]), np.concatenate([l, alte[1][j]])
-        return varianten(r, l, rng)
+        return varianten(r, l, rng, diagonal)
 
     kopie = copy.deepcopy(modell)
     return trainingslauf(kopie, ziehen, laeufe, schritte, lernrate, aufwaermen=20, seed=seed, protokoll=protokoll)

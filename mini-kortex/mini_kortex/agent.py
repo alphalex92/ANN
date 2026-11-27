@@ -36,13 +36,14 @@ class Ergebnis:
 
 class Agent:
     def __init__(self, modell, metakognition=True, werkzeug=True, gedaechtnis=True,
-                 max_schritte=16, schwelle=0.5):
+                 max_schritte=16, schwelle=0.5, diagonal=False):
         self.modell = modell.eval()
         self.metakognition = metakognition
         self.werkzeug = werkzeug
         self.gedaechtnis = HopfieldGedaechtnis() if gedaechtnis else None
         self.max_schritte = max_schritte
         self.schwelle = schwelle
+        self.diagonal = diagonal  # Regelprüfer für Diagonal-Sudoku
 
     def _aus_gedaechtnis(self, raetsel):
         """Versucht, jedes Rätsel aus dem Gedächtnis zu beantworten. Gibt (Antworten, Treffer) zurück."""
@@ -56,7 +57,7 @@ class Agent:
             if vorschlag is None:
                 continue
             if self.werkzeug:
-                ok = gueltig_batch(vorschlag[None], raetsel[i][None])[0]
+                ok = gueltig_batch(vorschlag[None], raetsel[i][None], self.diagonal)[0]
             else:
                 # Ohne Werkzeug bleibt nur das Bauchgefühl: nur bei fast identischen Erinnerungen trauen.
                 ok = aehnlichkeit > 0.95 and bool(((raetsel[i] == 0) | (raetsel[i] == vorschlag)).all())
@@ -93,7 +94,7 @@ class Agent:
                     # Mit Werkzeug: Ohne Metakognition wird nach jedem Schritt geprüft (teuer),
                     # mit Metakognition nur, wenn das Modell sich sicher fühlt.
                     pruefen = will_abgeben if self.metakognition else noch_aktiv.copy()
-                    ok = gueltig_batch(entwurf, raetsel[idx]) & pruefen
+                    ok = gueltig_batch(entwurf, raetsel[idx], self.diagonal) & pruefen
                     aufrufe[idx[pruefen]] += 1
                     fertig = ok | (noch_aktiv & letzter)
                     geprueft[idx[ok]] = True
@@ -112,6 +113,6 @@ class Agent:
             for i in np.flatnonzero(geprueft & ~aus_gedaechtnis):
                 self.gedaechtnis.speichern(raetsel[i], antwort[i], schritte[i])
 
-        richtig = (antwort == loesung).all(1) if loesung is not None else gueltig_batch(antwort, raetsel)
+        richtig = (antwort == loesung).all(1) if loesung is not None else gueltig_batch(antwort, raetsel, self.diagonal)
         quelle = np.where(aus_gedaechtnis, "gedaechtnis", "denken")
         return Ergebnis(antwort, richtig, schritte, quelle, geprueft, aufrufe, zuversicht)
