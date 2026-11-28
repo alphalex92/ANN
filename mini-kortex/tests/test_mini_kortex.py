@@ -336,3 +336,36 @@ def test_bilder_sudoku_zeigt_vorgaben_und_leere_felder():
     b = bilder_sudoku(raetsel, np.random.default_rng(0))
     assert b.shape == (2, 81, 28, 28)
     assert (b[raetsel == 0] == 0).all() and (b[raetsel > 0].reshape(-1, 784).max(1) > 0).all()
+
+
+def test_versetzte_kaesten_sind_eine_eigene_regel():
+    from mini_kortex.sudoku import feld, varianten
+    f = feld(9, "versetzt")
+    assert sorted(f.einheiten[18]) == [10, 11, 12, 19, 20, 21, 28, 29, 30]  # erster Kasten, eins versetzt
+    assert sorted(sum(f.einheiten[18:27], [])) == list(range(81))          # die Kästen zerlegen das Feld
+    rng = np.random.default_rng(34)
+    raetsel, loesungen, _ = datensatz(5, rng, n=9, diagonal="versetzt")
+    assert gueltig_batch(loesungen, raetsel, "versetzt").all()
+    assert not gueltig_batch(loesungen, raetsel).any()                      # klassisch falsch
+    assert all(anzahl_loesungen(r, diagonal="versetzt") == 1 for r in raetsel)
+    vr, vl = varianten(raetsel, loesungen, rng, "versetzt")
+    assert gueltig_batch(vl, vr, "versetzt").all()
+    with pytest.raises(ValueError):
+        feld(6, "versetzt")
+
+
+def test_attention_denkkern_laesst_sich_speichern_und_laden(tmp_path):
+    from mini_kortex.training import laden, speichern
+    torch.manual_seed(0)
+    m = DenkModell(n=6, d=16, block="attention")
+    raetsel, loesungen, _ = datensatz(4, np.random.default_rng(35), n=6)
+    r = torch.as_tensor(raetsel)
+    teile = list(verlust(m, r, torch.as_tensor(loesungen), 2))
+    teile[-1][0].backward()
+    speichern(m, tmp_path / "a.pt")
+    m2 = laden(tmp_path / "a.pt")
+    assert m2.konfig["block"] == "attention"
+    with torch.no_grad():
+        a = [x[2] for x in m.eval().denken(r, 2)][-1]
+        b = [x[2] for x in m2.denken(r, 2)][-1]
+    assert torch.allclose(a, b)

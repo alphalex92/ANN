@@ -40,6 +40,30 @@ class MixerBlock(nn.Module):
         return h + self.kanal_mix(self.norm2(h))
 
 
+class AttentionBlock(nn.Module):
+    """Die Alternative zum Mixer: Jedes Feld entscheidet selbst, auf welche anderen Felder es achtet.
+
+    Beim Mixer ist das Mischen der Felder fest gelernt, für jedes Rätsel gleich. Bei Attention hängt
+    es vom Inhalt ab (Self-Attention wie im Transformer). Die Position jedes Feldes steckt schon im
+    Vektor aus der Wahrnehmung, mehr braucht es nicht.
+    """
+
+    def __init__(self, d, felder, koepfe=4):
+        super().__init__()
+        self.norm1 = nn.LayerNorm(d)
+        self.attention = nn.MultiheadAttention(d, koepfe, batch_first=True)
+        self.norm2 = nn.LayerNorm(d)
+        self.kanal_mix = nn.Sequential(nn.Linear(d, 4 * d), nn.GELU(), nn.Linear(4 * d, d))
+
+    def forward(self, h):
+        a = self.norm1(h)
+        h = h + self.attention(a, a, a, need_weights=False)[0]
+        return h + self.kanal_mix(self.norm2(h))
+
+
+BLOECKE = {"mixer": MixerBlock, "attention": AttentionBlock}
+
+
 class Wahrnehmung(nn.Module):
     """Rätsel (Ziffern 0–n pro Feld) → Vektor pro Feld. 0 = leer bekommt einen eigenen Vektor.
 
@@ -75,9 +99,9 @@ class Denkkern(nn.Module):
     Wenn x fehlt, aktualisiert es die Antwort.
     """
 
-    def __init__(self, d, felder, schichten=2, innere=3):
+    def __init__(self, d, felder, schichten=2, innere=3, block="mixer"):
         super().__init__()
-        self.f = nn.Sequential(*[MixerBlock(d, felder) for _ in range(schichten)])
+        self.f = nn.Sequential(*[BLOECKE[block](d, felder) for _ in range(schichten)])
         self.felder = felder
         self.norm = nn.LayerNorm(d)
         self.innere = innere
@@ -117,14 +141,16 @@ class DenkModell(nn.Module):
     """Alle neuronalen Teile zusammen. Die Steuerung (wann aufhören, Gedächtnis, Werkzeug)
     liegt in `agent.py`, damit man sie getrennt ein- und ausschalten kann."""
 
-    def __init__(self, n=6, d=64, schichten=2, innere=3, regeln=1):
+    def __init__(self, n=6, d=64, schichten=2, innere=3, regeln=1, block="mixer"):
         super().__init__()
         self.n = n
         self.konfig = dict(n=n, d=d, schichten=schichten, innere=innere)
         if regeln > 1:
             self.konfig["regeln"] = regeln
+        if block != "mixer":
+            self.konfig["block"] = block
         self.wahrnehmung = Wahrnehmung(d, n, regeln)
-        self.kern = Denkkern(d, n * n, schichten, innere)
+        self.kern = Denkkern(d, n * n, schichten, innere, block)
         self.ausgabe = nn.Linear(d, n)  # pro Feld: Rohwerte für die Ziffern 1–n
         self.metakognition = Metakognition(d)
 

@@ -35,7 +35,7 @@ möglich, würde aber die eigentliche Idee unter sehr viel Rechenarbeit begraben
 |---|---|---|---|
 | **Wahrnehmung** | [modell.py](mini_kortex/modell.py) | Sehrinde | Ziffer + Position jedes Feldes → Vektor |
 | **Arbeitsraum** | [modell.py](mini_kortex/modell.py) | "Global Workspace" | Drei Tensoren, über die alle Module reden: `x` (Rätsel), `z` (latenter Gedanke), `y` (Antwort-Entwurf) |
-| **Denkkern** | [modell.py](mini_kortex/modell.py) | Präfrontaler Kortex | Ein winziges Netz (2 Blöcke), das immer wieder auf seinen eigenen Zustand angewendet wird. Idee aus dem *Tiny Recursive Model* (TRM, 2025) |
+| **Denkkern** | [modell.py](mini_kortex/modell.py) | Präfrontaler Kortex | Ein winziges Netz (2 Blöcke), das immer wieder auf seinen eigenen Zustand angewendet wird. Idee aus dem *Tiny Recursive Model* (TRM, 2025). Wahlweise MLP-Mixer oder Self-Attention (`--block attention`, deutlich stärker) |
 | **Metakognition** | [modell.py](mini_kortex/modell.py) | Anteriorer cingulärer Kortex | Schätzt nach jedem Schritt: "Ist mein Entwurf komplett richtig?" |
 | **Werkzeug** | [sudoku.py](mini_kortex/sudoku.py) | (keins) | Exakte Regelprüfung. Kein Lernen, keine Unsicherheit |
 | **Gedächtnis** | [gedaechtnis.py](mini_kortex/gedaechtnis.py) | Hippocampus | Modernes Hopfield-Netz: speichert ein Erlebnis in einem Schritt, ruft über Ähnlichkeit ab |
@@ -374,7 +374,8 @@ klassischen Regeln *mehrere* Lösungen haben. Die alte Regel allein reicht dort 
 - Vergessen und Replay wie oben, und wieder keine falsche Lösung mit Prüfsiegel.
 
 Die Grenze ist damit noch nicht gefunden: Ein Drittel richtige Antworten zum Start reicht. Wo das
-Selbstlernen scheitert, müsste eine Regel zeigen, bei der das alte Modell anfangs fast nichts löst.
+Selbstlernen scheitert, zeigt eine Regel, bei der das alte Modell anfangs gar nichts löst (unten:
+versetzte Kästen).
 
 **Regel-Hinweis.** Liegt das Vergessen nur daran, dass das Netz nicht weiß, welche Regel gilt? Mit
 `umlernen --hinweis` bekommt die Wahrnehmung einen gelernten Vektor pro Regel (0 klassisch,
@@ -397,6 +398,73 @@ Links ohne, rechts mit Hinweis.
 - Mit Replay bringt der Hinweis bei der neuen Regel etwa einen halben bis einen Punkt, kaum mehr als
   die Streuung. Auch ohne Hinweis kann das Netz die Regeln dann offenbar gut genug auseinanderhalten.
 - Wieder keine einzige falsche Lösung mit Prüfsiegel.
+
+**Vergessen ohne alte Trainingsdaten.** Replay schützt, aber bisher kamen die alten Rätsel aus dem
+Trainingsset mit 40.000 Rätseln samt Lösungen. Ein Gehirn hat kein Lehrbuch zum Wiederholen. Geht es
+auch mit weniger? `umlernen --vergessen` vergleicht beim Selbstlernen der Diagonalregel:
+
+- **weniger Replay:** 10 statt 50 % alter Rätsel pro Batch
+- **eigene Erinnerungen:** Das Modell löst vorher 100 bzw. 500 klassische Rätsel selbst. Aufbewahrt
+  wird, was der Regelprüfer bestätigt, mit der *eigenen* Antwort. Nur diese wenigen Episoden werden
+  nachts wiederholt.
+- **EWC** (Elastic Weight Consolidation): kein Replay, dafür hält eine Strafe die Gewichte fest, die
+  für das Alte wichtig sind. Wie wichtig, schätzt die Fisher-Information auf 500 klassischen Rätseln.
+
+d128/16, Seed 0, Agent nach Nacht 3:
+
+| Gegenmittel | diagonal | klassisch |
+|---|---:|---:|
+| vorher | 69,4 % | 99,9 % |
+| ohne Replay | 99,9 % | 24,5 % |
+| Trainingsset, 50 % pro Batch | 97,4 % | 99,8 % |
+| Trainingsset, 10 % pro Batch | 99,2 % | 98,2 % |
+| 499 eigene Erinnerungen, 50 % | 97,5 % | 99,7 % |
+| **100 eigene Erinnerungen, 50 %** | **98,1 %** | **99,8 %** |
+| EWC, Stärke 100 | 99,8 % | 33,0 % |
+| EWC, Stärke 1000 | 99,6 % | 60,6 % |
+| EWC, Stärke 10.000 | 95,5 % | 99,6 % |
+
+- **100 eigene Erinnerungen reichen.** Sie schützen die alte Regel genauso gut wie das ganze
+  Trainingsset (99,8 %). Die Lösungen stammen vom Modell selbst, kein Lehrer ist nötig. Das passt zum
+  Hippocampus: Er speichert Erlebtes und spielt es im Schlaf ab, und dafür genügt eine kleine Auswahl.
+  Gegen eine schleichende Umdeutung einer Regel muss man nicht alles wiederholen, nur genug davon.
+- **Weniger Replay ist ein Kompromiss.** Mit 10 % alter Rätsel lernt das Modell die neue Regel
+  besser (99,2 statt 97,4 %), vergisst aber etwas von der alten (98,2 statt 99,8 %).
+- **EWC wirkt, ist aber ein Drehregler zwischen Alt und Neu.** Erst bei Stärke 10.000 hält es die
+  alte Regel (99,6 %), dafür lernt das Modell die neue schlechter als mit Replay (95,5 %). Schwächer
+  eingestellt schützt es nur teilweise. Replay aus eigenen Erinnerungen ist hier klar besser.
+- Ohne Replay vergisst das Modell diesmal auf 24,5 % (im Seed-Vergleich oben 33,3 %). Die Läufe auf
+  der GPU sind nicht bitgenau wiederholbar, die Spanne passt zur großen Streuung oben.
+
+**Unfreundliche Regel: versetzte Kästen.** Bei der Diagonalregel kam etwas *dazu*, und 70 % der
+Rätsel löste schon die alte Regel. Jetzt ändert sich eine Regel: Zeilen und Spalten bleiben, aber
+jeder Kasten ist um eine Zeile und eine Spalte nach rechts unten verschoben und läuft am Rand um.
+Keiner der alten Kästen gilt mehr, und kein einziges dieser Rätsel ist nach den alten Regeln lösbar.
+
+```bash
+python -m mini_kortex umlernen --regel versetzt
+```
+
+d128/16, Seed 0, Agent nach Nacht 3 (in Klammern: mit Regel-Hinweis, `--hinweis`):
+
+| Bedingung | versetzt | klassisch |
+|---|---:|---:|
+| vorher | 0 % | 99,9 % |
+| selbst, mit Replay | 0 % (0 %) | 99,9 % (99,9 %) |
+| selbst, ohne Replay | 0 % (0 %) | 99,9 % (99,9 %) |
+| Lehrer, mit Replay | 91,6 % (91,4 %) | 93,5 % (92,7 %) |
+| Lehrer, ohne Replay | 99,8 % (99,8 %) | 6,7 % (7,7 %) |
+
+- **Hier scheitert das Selbstlernen vollständig.** Das alte Modell löst tagsüber kein Rätsel, also
+  gibt es nachts nichts zu üben, und es bleibt bei 0 %. Selbstlernen braucht einen Halt: Ein Drittel
+  richtiger Antworten zum Start reichte bei der Diagonalregel, null reicht nicht.
+- **Mit Lehrer geht es schnell.** Nach einer Nacht löst das Modell 98 % der neuen Rätsel selbst.
+- **Ohne Replay ist die alte Regel danach fast weg** (6,7 %), stärker als bei der Diagonalregel.
+- **Mit Replay hängen beide Regeln bei etwa 92 %.** Das Netz muss allein aus den Vorgaben erkennen,
+  welche Regel gilt. Der Regel-Hinweis ändert daran nichts. Am Auseinanderhalten liegt es also nicht.
+  Eher reicht die Übungszeit nicht (jede Regel bekommt nachts nur den halben Batch), oder die beiden
+  Regeln kommen sich in den gemeinsamen Gewichten in die Quere. Das ist noch offen.
+- Wieder keine falsche Lösung mit Prüfsiegel.
 
 ## Ergebnisse: Probieren in Gedanken (das Netz als Weltmodell)
 
@@ -443,8 +511,29 @@ Mit d=64/8 ebenso, nur auf niedrigerem Niveau: 86,9 % → 93,7 % gesamt, Probier
 - Keine falsche Lösung mit Prüfsiegel.
 
 Ein *gelerntes* Weltmodell ist das noch nicht: Es gibt keinen eigenen Teil, der Folgen vorhersagt,
-das Netz löst die Gedanken-Rätsel einfach. Die nächste Stufe wäre, die Suche in den Schlaf zu
-übernehmen: Was nur mit Probieren klappte, wird nachts geübt, bis es ohne geht.
+das Netz löst die Gedanken-Rätsel einfach.
+
+**Probieren im Schlaf.** Wird aus dem Probieren Intuition? `konsolidieren --probieren` löst tagsüber
+mit Probieren in Gedanken und übt nachts alle so gefundenen, geprüften Lösungen.
+`--ausfuehrlich` misst zusätzlich die Rätsel, die Probieren verlangen (Denktiefe 0). d128/16,
+Seed 0, je 1000 neue schwere Rätsel pro Tag, gemessen mit dem Agenten ohne Probieren:
+
+| | schwer, Agent | Probier-Rätsel, Agent | schwer, mit Probieren |
+|---|---:|---:|---:|
+| vor dem Schlaf | 71,5 % | 38,5 % | 92,5 % |
+| Nacht 3, tagsüber nur nachgedacht | 92,6 % | 77,4 % | 97,8 % |
+| Nacht 3, tagsüber auch probiert | 92,9 % | 77,0 % | 98,5 % |
+| Nacht 1 ohne Replay, nur nachgedacht | 93,0 % | 80,5 % | 98,2 % |
+| Nacht 1 ohne Replay, auch probiert | 93,7 % | 81,4 % | 98,9 % |
+
+- **Probieren liefert tagsüber mehr Lösungen** (am ersten Tag 94 statt 73 %, darunter 170 nur mit
+  Annahmen), aber im Schlaf macht das kaum einen Unterschied: unter einem Punkt, im Rauschen.
+- **Der Grund: Schon der normale Schlaf macht aus Probieren Intuition.** Wer nur die selbst
+  gedachten Lösungen übt, verdoppelt die Quote bei den Probier-Rätseln (38 → 77 %), ganz ohne
+  Annahmen. Das Netz lernt dabei Schlüsse, die über die einfachen menschlichen Regeln (nackte und
+  versteckte Einer) hinausgehen. Die wenigen zusätzlichen Probier-Lösungen fallen daneben nicht ins
+  Gewicht.
+- Keine falsche Lösung mit Prüfsiegel, weder tagsüber noch beim Messen.
 
 Das Weltmodell aus dem Gesamtentwurf ([ARCHITEKTUR.md](ARCHITEKTUR.md)) ist damit nicht ersetzt.
 Gemeint ist dort ein eigenes Modul, das die Folgen von Handlungen in einer Welt vorhersagt und aus
@@ -507,6 +596,98 @@ Was man daraus lernt:
 - **Der Preis ist Rechenzeit.** Der Arbeitsraum braucht im Schnitt 124 statt 67 Denkschritte, weil
   er bei Problemen mehrere Lesarten durchdenkt. Bei richtig gelesenen Rätseln kostet er nichts.
 
+**Dem Auge misstrauen: die Gegenprobe.** Woher kommen die falsch bestätigten Lösungen? Von 94 solchen
+Fällen (Seed 0, gutes Auge) gehörten 77 zu einer Lesart mit *mehreren* Lösungen. Bei richtigen
+Umdeutungen kam das nie vor (0 von 200). Ein echtes Sudoku hat genau eine Lösung. Daraus wird eine
+Gegenprobe ([sehen.py](mini_kortex/sehen.py), `zweite_loesung`):
+
+1. Nach einer Lösung setzt das System in jedes leere Feld probeweise jede andere erlaubte Ziffer.
+2. Das Netz denkt jedes dieser Gedanken-Rätsel 16 Schritte durch.
+3. Geht eines auf, hat die Lesart zwei Lösungen. Sie gilt dann als falsch gelesen, und es wird
+   weitergesucht wie bei einer Lesart, die nicht aufgeht.
+
+Den klassischen Löser braucht das nicht, die Gegenprobe macht das Netz selbst. Neuer Lauf, d128/16,
+Mittel über drei Seeds:
+
+| Auge | Ablauf | richtig | falsch, aber geprüft | aufgegeben | richtig bei 1 Lesefehler | Ø Schritte |
+|---|---|---:|---:|---:|---:|---:|
+| 1,1 % Fehler | Kette | 66,2 % | 2,0 % | 31,8 % | 0,1 % | 66 |
+| | Arbeitsraum | 92,8 % | 4,5 % | 2,7 % | 88,0 % | 122 |
+| | **+ Gegenprobe** | **94,6 %** | **1,0 %** | 4,3 % | **94,1 %** | 1673 |
+| 2,1 % Fehler | Kette | 45,5 % | 2,5 % | 52,0 % | 0,1 % | 101 |
+| | Arbeitsraum | 83,8 % | 7,2 % | 9,0 % | 88,3 % | 215 |
+| | **+ Gegenprobe** | **86,3 %** | **2,1 %** | 11,6 % | **94,0 %** | 1948 |
+
+- **Mit Gegenprobe bestätigt der Arbeitsraum seltener Falsches als die Kette** (1,0 statt 2,0 %),
+  und löst trotzdem 28 Punkte mehr. Die Gegenprobe fängt auch Lesefehler, die die Kette übersieht.
+- **Im Zweifel gibt das System auf.** „aufgegeben“ steigt leicht: lieber keine Antwort als eine falsche.
+- **Sie kostet viel Rechenzeit**, etwa 14-mal so viele Denkschritte. Die laufen aber parallel in
+  großen Batches (2000 Rätsel in 1–2 Minuten auf der GPU).
+- d64/8 (Seed 0) zeigt dasselbe: mit gutem Auge 90,5 statt 88,8 % richtig, falsch geprüft 1,5 statt 6,9 %.
+- Verworfen: ein „zweiter Blick“ auf leicht verschobene Bilder. Er macht es schlechter (mehr
+  Lesefehler), weil das Auge nie verschobene Bilder gesehen hat.
+
+`sehen` zeigt beide Varianten des Arbeitsraums nebeneinander.
+
+## Ergebnisse: kleinere Versuche
+
+**Schwelle der Metakognition.** Ab welcher Zuversicht gibt der Agent ab bzw. lässt prüfen? Bisher
+bei 0,5. 2000 Testrätsel, bis 32 Schritte:
+
+| Schwelle | d128/16 mit Werkzeug | Ø Schritte | d128/16 ohne Werkzeug | Ø Schritte |
+|---:|---:|---:|---:|---:|
+| 0,3 | **88,9 %** | 5,41 | 82,5 % | 5,27 |
+| 0,5 | 88,6 % | 5,52 | 85,3 % | 5,46 |
+| 0,7 | 87,8 % | 5,76 | 86,2 % | 5,73 |
+| 0,9 | 87,2 % | 6,04 | **86,6 %** | 6,04 |
+| 0,99 | 85,2 % | 6,82 | 85,2 % | 6,82 |
+
+- **Ohne Werkzeug lohnt eine höhere Schwelle**, bis etwa 0,9: Das Modell gibt seltener falsch ab.
+- **Mit Werkzeug ist eine niedrige Schwelle besser.** Eine Prüfung kostet fast nichts, und wer zu spät
+  prüft, denkt über eine schon richtige Lösung hinaus und driftet wieder weg (wie bei 224 statt 32
+  Schritten). Vorsicht zahlt sich nur aus, wenn niemand nachrechnet.
+- d64/8 zeigt dasselbe Bild (mit Werkzeug 86,4 % bei 0,3, ohne 84,2 % bei 0,95).
+
+**Noch tiefer üben (`--schritte 32`).** d128 mit 32 statt 16 Denkschritten im Training, Seed 0:
+
+| | Agent | Tiefe 10+, nach 8 / 32 Schritten | Probieren-Rätsel, nach 8 / 32 Schritten | mit Probieren in Gedanken |
+|---|---:|---:|---:|---:|
+| d128/16 | 88,6 % | 51,1 / 32,6 % | 36,2 / 28,6 % | 97,7 % |
+| d128/32 | 89,6 % | 48,2 / 44,7 % | 35,7 / 32,7 % | 98,0 % |
+
+- **Von 16 auf 32 Schritte bringt das Training nur noch einen Punkt**, von 8 auf 16 waren es noch 4
+  bis 5. Das Training dauert dafür doppelt so lange.
+- **Die langen Schlussketten werden nicht besser.** Bei Tiefe 10+ erreichen beide Modelle ihr Bestes
+  nach etwa 8 Schritten. Das tiefer geübte Modell driftet danach nur weniger ab (44,7 statt 32,6 %
+  nach 32 Schritten).
+- Hier stößt der Mixer-Denkkern an seine Grenze.
+
+**Attention statt Mixer (`trainieren --block attention`).** Im Mixer ist das Mischen der Felder fest
+gelernt, für jedes Rätsel gleich. Bei Self-Attention entscheidet jedes Feld je nach Inhalt, auf welche
+anderen Felder es achtet. Beide Denkkerne mit d=128 und 16 Schritten im Training, 2000 Testrätsel:
+
+| Denkkern | Läufe | Parameter | Agent | Ø Schritte | 1 Schritt | Tiefe 10+ | Probier-Rätsel |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Mixer, drei Seeds | 3000 | 364.000 | 88,2 ± 0,9 % | 5,7 | 48 % | 34 % | 29 % |
+| Mixer, Seed 0 | 6000 | 364.000 | 86,5 % | 5,9 | 58 % | 31 % | 24 % |
+| Attention, Seed 0 / 1 / 2 | 3000 | 443.000 | 98,9 / 65,8 / 84,7 % | 2,1 / 13,8 / 6,9 | | | |
+| **Attention, drei Seeds** | **6000** | 443.000 | **99,8 ± 0,1 %** | **1,6** | 56–85 % | **98,8 %** | **98,5 %** |
+
+Tiefe 10+ und Probier-Rätsel: reines Nachdenken, 32 Schritte, ohne Werkzeug und ohne Probieren.
+
+- **Attention löst fast alles**, auch die Rätsel, bei denen der Mixer selbst mit Probieren in Gedanken
+  oft scheiterte. Im Schnitt reichen 1,6 Denkschritte. Längeres Training hilft dem Mixer dagegen
+  nicht (86,5 % nach 6000 Läufen). Der Unterschied liegt in der Bauart, nicht in den 22 % mehr
+  Parametern.
+- **Attention ist schwer in Gang zu bringen.** In allen Läufen bleibt der Test etwa 1000 Läufe lang
+  bei 0 %, dann kommt ein Durchbruch. Bei 3000 Läufen kommt er oft zu spät: Die Lernrate ist dann
+  schon zu weit gesunken. Mit 6000 Läufen kommen alle drei Seeds auf 99,7–99,8 %.
+- **Was heißt das für die übrigen Module?** Fast alles, was oben Konsolidierung, Probieren und
+  Gegenprobe herausgeholt haben, schafft Attention schon allein. Die Architekturfragen bleiben, aber
+  um sie zu untersuchen, braucht ein Attention-Modell schwerere Aufgaben als 9×9-Sudoku. Der TRM-Befund,
+  dass der Mixer auf Sudoku besser abschneidet, bestätigt sich hier nicht. TRM trainierte allerdings
+  auf nur 1000 Rätseln, hier sind es gut 30.000.
+
 ## Ergebnisse 6×6
 
 Ein Modell mit 88.991 Parametern, 3000 Läufe (ca. 30 Minuten), 2000 Testrätsel mit 12–28 leeren
@@ -528,16 +709,21 @@ Der Prototyp zeigt die Bausteine im Kleinen. Ein eigenes Weltmodell, Sprachkern 
 großen Architektur fehlen, weil Sudoku sie nicht braucht. Gesamtentwurf, vorgeschlagene Reihenfolge
 und offene Fragen stehen in [ARCHITEKTUR.md](ARCHITEKTUR.md).
 
-- **Vergessen ohne alte Daten verhindern**: Replay aus dem eigenen Gedächtnis statt aus dem
-  Trainingsset, weniger Replay pro Batch, oder wichtige Gewichte schützen (Elastic Weight Consolidation).
-- **Unfreundliche neue Regel**: eine Regel, die die alte kaum überschneidet. Wann scheitert das
-  Selbstlernen, und hilft dann der Lehrer?
-- **Dem Auge misstrauen lernen**: Der Arbeitsraum bestätigt manchmal ein falsch gelesenes Rätsel.
-  Abhilfe könnte sein, aufzugeben, wenn eine Lösung sichere Vorgaben umdeuten muss. Oder das Auge
-  schaut verdächtige Felder wirklich nochmal an, etwa leicht verschoben.
-- **Probieren im Schlaf**: Lösungen, die nur mit Annahmen gefunden wurden, nachts üben. Wird aus dem
-  Probieren Intuition, wie zuvor aus dem langen Nachdenken?
-- Noch tiefer üben (`--schritte 32`): Wächst der Gewinn bei den langen Schlussketten weiter?
-- Die Metakognition mit `schwelle=0.9` statt `0.5` in [agent.py](mini_kortex/agent.py): weniger
-  Fehler, mehr Schritte?
-- Den MLP-Mixer in `modell.py` durch Attention ersetzen und vergleichen.
+Die Ideen der letzten Runde (Vergessen ohne alte Daten, unfreundliche Regel, dem Auge misstrauen,
+Probieren im Schlaf, tiefer üben, Schwelle, Attention) sind oben ausgewertet. Was sich daraus ergibt:
+
+- **Den Attention-Denkkern überall einsetzen** (6000 Läufe): Konsolidierung, neue Regeln und visuelles Sudoku mit
+  dem stärkeren Modell wiederholen. Bleibt dann für Schlaf und Probieren noch etwas zu tun, oder
+  braucht es schwerere Aufgaben? Und warum bleibt das Training so lange bei null?
+- **Zwei Regeln mit Replay**: Bei den versetzten Kästen hängen beide Regeln bei etwa 92 %, auch mit
+  Hinweis. Mehr Nächte, mehr Läufe pro Nacht oder ein breiteres Modell würden zeigen, ob es an der
+  Übungszeit oder an der Kapazität liegt.
+- **Wie wenige Erinnerungen reichen?** 100 eigene Episoden schützen die alte Regel vollständig. Reichen
+  auch 10? Und welche sollte das Gedächtnis behalten, die schweren oder die typischen?
+- **Selbstlernen ohne Halt**: Bei den versetzten Kästen löst das Modell anfangs nichts. Könnte es sich
+  mit Probieren in Gedanken und der Gegenprobe selbst den ersten Halt verschaffen, oder mit leichten
+  Rätseln der neuen Regel zuerst (ein Lehrplan statt eines Lehrers)?
+- **Billigere Gegenprobe**: Sie kostet 14-mal so viele Denkschritte. Nur bei unsicheren Lesarten
+  prüfen, oder nur die Felder, in denen sich zwei Lösungen unterscheiden könnten.
+- **Schwelle anpassen**: Mit Werkzeug wäre 0,3 besser als 0,5. Die Metakognition könnte die Schwelle
+  auch selbst lernen: früh prüfen, wenn Prüfen billig ist.

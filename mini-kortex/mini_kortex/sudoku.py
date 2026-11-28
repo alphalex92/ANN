@@ -4,8 +4,13 @@
     9×9: Kästen aus 3 Zeilen × 3 Spalten, Ziffern 1–9, 81 Felder
 
 In jeder Zeile, jeder Spalte und jedem Kasten kommt jede Ziffer genau einmal vor.
-Als zweite Regelvariante gibt es **Diagonal-Sudoku** (`diagonal=True`): Zusätzlich müssen auch die
-beiden Hauptdiagonalen jede Ziffer genau einmal enthalten.
+Der Parameter `diagonal` wählt die Regelvariante:
+
+    False        klassisch
+    True         **Diagonal-Sudoku**: zusätzlich enthalten beide Hauptdiagonalen jede Ziffer genau einmal
+    "versetzt"   **versetzte Kästen**: Zeilen und Spalten wie gewohnt, aber jeder Kasten ist um eine
+                 Zeile und eine Spalte nach rechts unten verschoben und läuft am Rand um (wie auf
+                 einem Torus). Keiner der alten Kästen gilt mehr. Nur 9×9.
 Eine 0 steht für ein leeres Feld. Ein Gitter ist ein flaches Array mit n·n Einträgen;
 die Größe ergibt sich aus der Länge (36 → 6×6, 81 → 9×9).
 
@@ -22,14 +27,34 @@ import numpy as np
 KASTEN = {6: (2, 3), 9: (3, 3)}  # Größe → (Zeilen, Spalten) eines Kastens
 
 
+VARIANTEN = (False, True, "versetzt")
+
+
+def _pruefe_variante(diagonal):
+    if diagonal not in VARIANTEN or (diagonal is not False and diagonal is not True and diagonal != "versetzt"):
+        raise ValueError(f"Unbekannte Regelvariante {diagonal!r}, möglich: {VARIANTEN}")
+    return diagonal
+
+
+def _versetzt(i, n, schritt=1):
+    """Feld i um `schritt` Zeilen und Spalten nach rechts unten verschoben (mit Umlauf)."""
+    return ((i // n + schritt) % n) * n + (i % n + schritt) % n
+
+
 class Feld:
     """Die Geometrie eines Spielfelds: welche Felder gehören zusammen?"""
 
     def __init__(self, n, diagonal=False):
         if n not in KASTEN:
             raise ValueError(f"Unbekannte Größe {n}, möglich: {sorted(KASTEN)}")
+        _pruefe_variante(diagonal)
+        if diagonal == "versetzt" and n != 9:
+            raise ValueError("Versetzte Kästen gibt es hier nur für 9×9")
+        versetzt = diagonal == "versetzt"
+        diagonal = diagonal is True
         self.n = n
         self.diagonal = diagonal
+        self.versetzt = versetzt
         self.felder = n * n
         self.kz, self.ks = KASTEN[n]
         self.alle = (1 << n) - 1  # Bitmaske: alle Ziffern noch möglich
@@ -40,13 +65,18 @@ class Feld:
             for br in range(0, n, self.kz)
             for bc in range(0, n, self.ks)
         ]
+        if versetzt:
+            kaesten = [[_versetzt(i, n) for i in k] for k in kaesten]
         diagonalen = [[i * n + i for i in range(n)], [i * n + n - 1 - i for i in range(n)]] if diagonal else []
         self.einheiten = zeilen + spalten + kaesten + diagonalen
         self.einheiten_array = np.array(self.einheiten)
         # Für jedes Feld: Nummer seiner Zeile, Spalte und seines Kastens.
         self.zeile = [i // n for i in range(self.felder)]
         self.spalte = [i % n for i in range(self.felder)]
-        self.kasten = [(i // n) // self.kz * (n // self.ks) + (i % n) // self.ks for i in range(self.felder)]
+        self.kasten = [0] * self.felder
+        for k, felder in enumerate(kaesten):
+            for i in felder:
+                self.kasten[i] = k
         # Liegt das Feld auf der Haupt- bzw. Nebendiagonale (nur bei Diagonal-Sudoku von Belang)?
         self.auf_d1 = [diagonal and i // n == i % n for i in range(self.felder)]
         self.auf_d2 = [diagonal and i // n + i % n == n - 1 for i in range(self.felder)]
@@ -288,9 +318,18 @@ def zufaellige_symmetrie(n, rng, diagonal=False):
     Bei Diagonal-Sudoku sind nur die Umordnungen erlaubt, die auch beide Diagonalen erhalten
     (siehe `_diagonal_permutation`), dazu Transponieren und Spiegeln an der senkrechten Achse.
     Diese Umordnungen erhalten auch die klassischen Regeln.
+
+    Bei versetzten Kästen: dieselben Umordnungen wie klassisch, nur im um eins verschobenen Gitter
+    (verschieben, klassisch umordnen, zurückschieben).
     """
     f = feld(n)
-    if diagonal:
+    _pruefe_variante(diagonal)
+    if diagonal == "versetzt":
+        reihenfolge, ziffern = zufaellige_symmetrie(n, rng)
+        hin = np.array([_versetzt(i, n) for i in range(n * n)])
+        zurueck = np.argsort(hin)
+        return hin[reihenfolge[zurueck]], ziffern
+    if diagonal is True:
         if f.kz != f.ks:
             raise ValueError("Diagonal-Sudoku gibt es hier nur mit quadratischen Kästen (9×9)")
         sigma = _diagonal_permutation(f, rng)
@@ -336,9 +375,16 @@ def zufaelliges_gitter(rng, n=6, diagonal=False):
     """Ein zufälliges vollständiges Gitter: festes gültiges Muster + zufällige Symmetrie.
 
     Für Diagonal-Sudoku gibt es kein so einfaches Muster: Dort füllt der Löser ein leeres Gitter
-    und probiert die Ziffern in zufälliger Reihenfolge.
+    und probiert die Ziffern in zufälliger Reihenfolge. Versetzte Kästen: ein klassisches Gitter,
+    um eine Zeile und eine Spalte verschoben.
     """
-    if diagonal:
+    _pruefe_variante(diagonal)
+    if diagonal == "versetzt":
+        klassisch = zufaelliges_gitter(rng, n)
+        neu = np.empty_like(klassisch)
+        neu[[_versetzt(i, n) for i in range(n * n)]] = klassisch
+        return neu
+    if diagonal is True:
         ergebnis = []
         anzahl_loesungen(np.zeros(n * n, np.int64), grenze=1, diagonal=True, rng=rng, ausgabe=ergebnis)
         return np.array(ergebnis[0], np.int64)

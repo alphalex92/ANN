@@ -30,7 +30,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .sudoku import feld_fuer
-from .weltmodell import probieren
+from .weltmodell import erlaubte_ziffern, nachdenken, probieren
 
 # Die vier MNIST-Originaldateien (*-ubyte.gz). Standard: Ordner `mnist` im aktuellen Verzeichnis.
 MNIST_ORDNER = Path(os.environ.get("MINI_KORTEX_MNIST", "mnist"))
@@ -174,7 +174,30 @@ def kette(modell, p, **loeser):
     return e
 
 
-def arbeitsraum(modell, p, kandidaten=10, paare=5, verdacht=0.99, mindestens=1e-3, **loeser):
+def zweite_loesung(modell, raetsel, antwort, schritte=16):
+    """Gegenprobe: Gibt es neben `antwort` noch eine andere Lösung? Rückgabe: (gefunden (B,), Schritte (B,)).
+
+    Ein echtes Sudoku hat genau eine Lösung. Für jedes leere Feld und jede dort erlaubte Ziffer, die
+    nicht in `antwort` steht, entsteht ein Gedanken-Rätsel mit dieser Ziffer als zusätzlicher
+    Vorgabe. Löst das Netz eines davon regelkonform, hat das Rätsel mindestens zwei Lösungen.
+    Findet es keines, heißt das nicht sicher, dass es keine gibt (das Netz kann scheitern).
+    """
+    raetsel, antwort = np.asarray(raetsel), np.asarray(antwort)
+    erlaubt = erlaubte_ziffern(raetsel)
+    erlaubt[np.arange(len(raetsel))[:, None], np.arange(raetsel.shape[1])[None], np.clip(antwort - 1, 0, None)] = False
+    wem, feld, ziffer = np.nonzero(erlaubt)
+    gefunden = np.zeros(len(raetsel), bool)
+    kosten = np.zeros(len(raetsel), np.int64)
+    if len(wem):
+        kinder = raetsel[wem].copy()
+        kinder[np.arange(len(kinder)), feld] = ziffer + 1
+        ok, *_rest, verbraucht = nachdenken(modell, kinder, schritte)
+        np.logical_or.at(gefunden, wem, ok)
+        np.add.at(kosten, wem, verbraucht)
+    return gefunden, kosten
+
+
+def arbeitsraum(modell, p, kandidaten=10, paare=5, verdacht=0.99, mindestens=1e-3, gegenprobe=False, **loeser):
     """Erkennen und Lösen im Austausch (siehe Moduldoku).
 
     kandidaten: so viele Umdeutungen einzelner Felder werden höchstens ausprobiert
@@ -182,9 +205,12 @@ def arbeitsraum(modell, p, kandidaten=10, paare=5, verdacht=0.99, mindestens=1e-
     verdacht:   nur Vorgaben umdeuten, die im Widerspruch stehen oder bei denen das Auge weniger
                 sicher war als dieser Wert (None: alle Vorgaben)
     mindestens: eine andere Ziffer kommt nur in Frage, wenn das Auge ihr mindestens so viel zutraut
+    gegenprobe: eine Lösung zählt nur, wenn das Netz keine zweite Lösung derselben Lesart findet
+                (siehe `zweite_loesung`). Eine Lesart mit zwei Lösungen ist vermutlich falsch gelesen.
 
-    Nochmal hingeschaut wird nur, wenn die erste Lesart nicht aufgeht. Geht sie auf, passt sie
-    ohnehin am besten zu den Bildern, denn sie nimmt überall die wahrscheinlichste Ziffer.
+    Nochmal hingeschaut wird nur, wenn die erste Lesart nicht aufgeht (oder mit Gegenprobe
+    mehrdeutig ist). Geht sie auf, passt sie ohnehin am besten zu den Bildern, denn sie nimmt
+    überall die wahrscheinlichste Ziffer.
     """
     gelesen = p.argmax(-1)
     leer = gelesen == 0
@@ -193,6 +219,13 @@ def arbeitsraum(modell, p, kandidaten=10, paare=5, verdacht=0.99, mindestens=1e-
     erst = probieren(modell, gelesen, **loeser)
     geloest, antwort = erst["geloest"] & ~konflikt.any(1), erst["antwort"].copy()
     schritte = erst["schritte"].copy()
+    mehrdeutig = np.zeros(b, bool)
+    if gegenprobe and geloest.any():
+        i = np.flatnonzero(geloest)
+        zweite, extra = zweite_loesung(modell, gelesen[i], antwort[i])
+        schritte[i] += extra
+        mehrdeutig[i] = zweite
+        geloest[i[zweite]] = False
     nochmal = np.flatnonzero(~geloest)
     plausibel = np.where(geloest, _plausibilitaet(p, leer, antwort), -np.inf)
 
@@ -228,13 +261,18 @@ def arbeitsraum(modell, p, kandidaten=10, paare=5, verdacht=0.99, mindestens=1e-
         if len(lesarten):
             e = probieren(modell, lesarten, **loeser)
             np.add.at(schritte, wem, e["schritte"])
+            if gegenprobe and e["geloest"].any():
+                j = np.flatnonzero(e["geloest"])
+                zweite, extra = zweite_loesung(modell, lesarten[j], e["antwort"][j])
+                np.add.at(schritte, wem[j], extra)
+                e["geloest"][j[zweite]] = False
             punkte = np.where(e["geloest"], _plausibilitaet(p[wem], lesarten == 0, e["antwort"]), -np.inf)
             for j in np.argsort(-punkte):
                 i = wem[j]
                 if punkte[j] > plausibel[i]:
                     plausibel[i], antwort[i], geloest[i] = punkte[j], e["antwort"][j], True
     return {"geloest": geloest, "antwort": antwort, "schritte": schritte, "gelesen": gelesen,
-            "lesarten": extra_aufrufe}
+            "lesarten": extra_aufrufe, "mehrdeutig": mehrdeutig}
 
 
 def auswerten(e, raetsel, loesung):

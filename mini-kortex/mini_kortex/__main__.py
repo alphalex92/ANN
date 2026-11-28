@@ -9,7 +9,7 @@ import numpy as np
 import torch
 
 from .agent import Agent
-from .konsolidierung import SPALTEN, experiment, experiment_daten
+from .konsolidierung import experiment, experiment_daten, spalten
 from .sudoku import LEER_STANDARD, als_text, datensatz, gueltig_batch
 from .training import daten_laden, genauigkeit_pro_schritt, laden, speichern, trainieren
 
@@ -56,7 +56,7 @@ def befehl_trainieren(args):
     zwischenstand = modellpfad(n, ".zwischenstand")
     modell, _ = trainieren(n=n, laeufe=args.laeufe, batch=args.batch, schritte=args.schritte, d=args.d,
                            lernrate=args.lernrate, leer_max=leer_max, zwischenstand=zwischenstand,
-                           geraet=args.geraet, seed=args.seed)
+                           geraet=args.geraet, seed=args.seed, block=args.block)
     speichern(modell, modellpfad(n), info={"leer_max": leer_max, "schritte": args.schritte})
     zwischenstand.unlink(missing_ok=True)
     print(f"\nGespeichert in {modellpfad(n)}")
@@ -68,7 +68,7 @@ def _mittel(werte):
 
 def befehl_auswerten(args):
     n = args.groesse
-    modell = _modell(n, args.geraet)
+    modell = laden(Path(args.modell), geraet=args.geraet) if args.modell else _modell(n, args.geraet)
     lang = MAX_SCHRITTE[n]
     mittel = lang // 4
     _, (raetsel, loesung, tiefe) = daten_laden(n, 0, args.anzahl)
@@ -162,17 +162,20 @@ def befehl_konsolidieren(args):
     print(f"Testmengen: schwer = mehr als {leer_basis} leere Felder, leicht = höchstens {leer_basis}.")
     if args.lehrer:
         print("Lehrer-Modus: nachts alle erlebten Rätsel mit den echten Lösungen üben.")
+    if args.probieren:
+        print("Tagsüber mit Probieren in Gedanken lösen, nachts alle so gefundenen Lösungen üben.")
     print()
     konsolidiert, zeilen, wachphasen = experiment(modell, alte, wach_daten, schwer, leicht, zyklen=args.zyklen,
                                                   laeufe=args.laeufe, max_schritte=MAX_SCHRITTE[n], schritte=schritte,
-                                                  lehrer=args.lehrer)
-    pfad = modellpfad(n, "_lehrer" if args.lehrer else "_konsolidiert")
+                                                  lehrer=args.lehrer, probieren_wach=args.probieren,
+                                                  ausfuehrlich=args.ausfuehrlich)
+    pfad = modellpfad(n, "_lehrer" if args.lehrer else "_probieren" if args.probieren else "_konsolidiert")
     speichern(konsolidiert, pfad, info={"leer_max": leer_basis, "schritte": schritte})
     print(f"\nKonsolidiertes Modell gespeichert in {pfad}")
     if args.json:
         Path(args.json).write_text(json.dumps({
-            "spalten": [titel for _, titel, _ in SPALTEN],
-            "zeilen": [[name] + [float(w[k]) for k, _, _ in SPALTEN] for name, w in zeilen],
+            "spalten": [titel for _, titel, _ in spalten(zeilen[0][1])],
+            "zeilen": [[name] + [float(w[k]) for k, _, _ in spalten(w)] for name, w in zeilen],
             "wachphasen": wachphasen}, ensure_ascii=False, indent=1))
         print(f"Ergebnisse als JSON in {args.json}")
 
@@ -188,20 +191,32 @@ def befehl_umlernen(args):
     leer_basis = info.get("leer_max", LEER_TRAINING[n])
     schritte = args.schritte or info.get("schritte", 8)
     leer_min = LEER_STANDARD[n][0]
-    print(f"Diagonal-Rätsel mit {leer_min}–{leer_basis} leeren Feldern (wie im Training). "
+    print(f"Rätsel der neuen Regel mit {leer_min}–{leer_basis} leeren Feldern (wie im Training). "
           f"Im Schlaf: {schritte} Denkschritte pro Rätsel.")
-    art = "Diagonal-Rätsel, die klassisch mehrdeutig sind," if args.mehrdeutig else "Diagonal-Rätsel"
+    neu = "versetzt" if args.regel == "versetzt" else True
+    if args.mehrdeutig and neu is not True:
+        sys.exit("--mehrdeutig gibt es nur für Diagonal-Sudoku")
+    if args.vergessen and neu is not True:
+        sys.exit("--vergessen gibt es nur für Diagonal-Sudoku")
+    art = ("Diagonal-Rätsel, die klassisch mehrdeutig sind," if args.mehrdeutig else
+           "Diagonal-Rätsel" if neu is True else "Rätsel mit versetzten Kästen")
     print(f"Erzeuge {args.anzahl_wach} {art} zum Erleben und je {args.anzahl_test} zum Testen …")
     if args.hinweis:
         print("Mit Regel-Hinweis: Das Modell erfährt bei jedem Rätsel, welche Regel gilt.")
     wach_daten, diag, klass = umlernen.umlernen_daten(n, args.anzahl_wach, args.anzahl_test, leer_min, leer_basis,
-                                                      seed=args.seed, mehrdeutig=args.mehrdeutig)
+                                                      seed=args.seed, mehrdeutig=args.mehrdeutig, neu=neu)
     (tr_r, tr_l, _), _ = daten_laden(n, 40_000, 0)
     auswahl = (tr_r == 0).sum(1) <= leer_basis
     alte = (tr_r[auswahl], tr_l[auswahl])
-    ergebnis = umlernen.experiment(modell, alte, wach_daten, diag, klass, zyklen=args.zyklen, laeufe=args.laeufe,
-                                   schritte=schritte, max_schritte=MAX_SCHRITTE[n], seed=args.seed,
-                                   hinweis=args.hinweis)
+    if args.vergessen:
+        print("Vergessen-Experiment: Selbstlernen mit verschiedenen Gegenmitteln gegen das Vergessen.")
+        ergebnis = umlernen.vergessen_experiment(modell, alte, wach_daten, diag, klass, zyklen=args.zyklen,
+                                                 laeufe=args.laeufe, schritte=schritte,
+                                                 max_schritte=MAX_SCHRITTE[n], seed=args.seed)
+    else:
+        ergebnis = umlernen.experiment(modell, alte, wach_daten, diag, klass, zyklen=args.zyklen, laeufe=args.laeufe,
+                                       schritte=schritte, max_schritte=MAX_SCHRITTE[n], seed=args.seed,
+                                       hinweis=args.hinweis, neu=neu)
     if args.json:
         def zahlen(w):
             return {k: float(v) for k, v in w.items()}
@@ -250,7 +265,8 @@ def befehl_probieren(args):
 
 
 def befehl_sehen(args):
-    """Visuelles Sudoku: Kette (erst erkennen, dann lösen) gegen Arbeitsraum (Austausch) und Orakel."""
+    """Visuelles Sudoku: Kette (erst erkennen, dann lösen) gegen Arbeitsraum (Austausch, mit und ohne
+    Gegenprobe auf eine zweite Lösung) und Orakel."""
     from .sehen import arbeitsraum, auge_genauigkeit, auge_trainieren, auswerten, bilder_sudoku, kette, lesefehler, sehen
     from .weltmodell import probieren
     n = args.groesse
@@ -272,11 +288,13 @@ def befehl_sehen(args):
         print(f"  {'':<14} {'richtig':>8} {'falsch, aber geprüft':>21} {'aufgegeben':>11}"
               + "".join(f"{'richtig bei ' + g:>15}" for g, _ in gruppen) + f"{'Ø Schritte':>12}")
         zeilen = {}
-        for name in ("orakel", "kette", "arbeitsraum"):
+        for name in ("orakel", "kette", "arbeitsraum", "+ gegenprobe"):
             if name == "orakel":
                 e = probieren(modell, raetsel, **loeser)
+            elif name == "kette":
+                e = kette(modell, p, **loeser)
             else:
-                e = (kette if name == "kette" else arbeitsraum)(modell, p, **loeser)
+                e = arbeitsraum(modell, p, gegenprobe=name == "+ gegenprobe", **loeser)
             w = auswerten(e, raetsel, loesung)
             richtig = e["geloest"] & (e["antwort"] == loesung).all(1)
             w.update({f"richtig_{g}": float(richtig[m].mean()) if m.any() else float("nan") for g, m in gruppen})
@@ -340,11 +358,14 @@ def main():
                    help="nur auf Rätseln mit höchstens so vielen Leerfeldern trainieren (Standard: 28 bei 6×6, 46 bei 9×9)")
     t.add_argument("--seed", type=int, default=0,
                    help="Startwerte und Reihenfolge der Batches; die Rätsel bleiben dieselben")
+    t.add_argument("--block", choices=["mixer", "attention"], default="mixer",
+                   help="Bauart des Denkkerns: fest gelerntes Mischen der Felder (Standard) oder Self-Attention")
     t.add_argument("--threads", type=int, default=0)
     t.set_defaults(f=befehl_trainieren)
 
     a = sub.add_parser("auswerten", help="Module einzeln zu- und abschalten und vergleichen")
     a.add_argument("--anzahl", type=int, default=2000)
+    a.add_argument("--modell", help="anderes Modell laden")
     a.add_argument("--json", help="Ergebnisse zusätzlich als JSON speichern")
     a.set_defaults(f=befehl_auswerten)
 
@@ -357,6 +378,10 @@ def main():
     k.add_argument("--anzahl-test", type=int, default=1000, help="Rätsel pro Testmenge (schwer und leicht)")
     k.add_argument("--lehrer", action="store_true",
                    help="Vergleich: nachts alle erlebten Rätsel mit den echten Lösungen üben")
+    k.add_argument("--probieren", action="store_true",
+                   help="tagsüber mit Probieren in Gedanken lösen und nachts auch diese Lösungen üben")
+    k.add_argument("--ausfuehrlich", action="store_true",
+                   help="zusätzlich messen: Rätsel, die Probieren verlangen, und Probieren in Gedanken")
     k.add_argument("--json", help="Ergebnisse zusätzlich als JSON speichern")
     k.set_defaults(f=befehl_konsolidieren)
 
@@ -371,6 +396,11 @@ def main():
                    help="das Modell erfährt bei jedem Rätsel, welche Regel gilt (Regel-Hinweis)")
     u.add_argument("--mehrdeutig", action="store_true",
                    help="nur Diagonal-Rätsel, die nach den klassischen Regeln mehrere Lösungen haben")
+    u.add_argument("--regel", choices=["diagonal", "versetzt"], default="diagonal",
+                   help="die neue Regel: Diagonal-Sudoku (Standard) oder versetzte Kästen (unfreundlich)")
+    u.add_argument("--vergessen", action="store_true",
+                   help="statt der vier Bedingungen: Selbstlernen mit Gegenmitteln gegen das Vergessen "
+                        "(weniger Replay, eigene Erinnerungen, EWC)")
     u.add_argument("--json", help="Ergebnisse zusätzlich als JSON speichern")
     u.set_defaults(f=befehl_umlernen)
 

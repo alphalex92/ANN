@@ -66,11 +66,12 @@ def ziehen_aus(raetsel, loesungen, batch, symmetrien=True):
 
 
 def trainingslauf(modell, ziehen, laeufe, schritte=8, lernrate=1e-3, aufwaermen=200, seed=0,
-                  pruefen=None, alle=250, protokoll=print, zwischenstand=None):
+                  pruefen=None, alle=250, protokoll=print, zwischenstand=None, strafe=None):
     """Die eigentliche Trainingsschleife. `ziehen(rng)` liefert pro Lauf einen Batch (Rätsel, Lösungen),
     bei Modellen mit Regel-Hinweis auch (Rätsel, Lösungen, Regel pro Rätsel).
 
     `pruefen(lauf)` darf einen Text zurückgeben, der alle `alle` Läufe ins Protokoll geschrieben wird.
+    `strafe(modell)`: zusätzlicher Verlust (Tensor), der zu jedem Teilverlust addiert wird, etwa EWC.
     `zwischenstand`: Datei, in die alle `alle` Läufe der komplette Trainingszustand geschrieben wird.
     Existiert sie beim Start schon, geht das Training dort weiter. So kostet ein Absturz oder
     Neustart des Rechners höchstens `alle` Läufe.
@@ -104,6 +105,8 @@ def trainingslauf(modell, ziehen, laeufe, schritte=8, lernrate=1e-3, aufwaermen=
         letzter = 0.0
         for teil, richtig in verlust(modell, r, l, schritte, regel):
             opt.zero_grad()
+            if strafe is not None:
+                teil = teil + strafe(modell)
             teil.backward()
             torch.nn.utils.clip_grad_norm_(modell.parameters(), 1.0)
             opt.step()
@@ -122,17 +125,49 @@ def trainingslauf(modell, ziehen, laeufe, schritte=8, lernrate=1e-3, aufwaermen=
     return modell
 
 
+def ewc_strafe(modell, raetsel, loesungen, staerke, schritte=8, batch=100, regel=None):
+    """Elastic Weight Consolidation (Kirkpatrick u. a. 2017): wichtige Gewichte festhalten.
+
+    Wie wichtig ein Gewicht für das Alte ist, schätzt die Fisher-Information: das mittlere Quadrat
+    seines Gradienten auf alten Rätseln. Die Strafe wächst mit dem Quadrat der Abweichung vom alten
+    Wert, gewichtet mit dieser Wichtigkeit. Unwichtige Gewichte dürfen sich frei bewegen.
+    Gibt `strafe(modell)` für `trainingslauf` zurück.
+    """
+    alt = {n: p.detach().clone() for n, p in modell.named_parameters()}
+    fisher = {n: torch.zeros_like(p) for n, p in modell.named_parameters()}
+    geraet = modell.geraet
+    modell.train()
+    anzahl = 0
+    for i in range(0, len(raetsel), batch):
+        r = torch.as_tensor(raetsel[i:i + batch]).to(geraet)
+        l = torch.as_tensor(loesungen[i:i + batch]).to(geraet)
+        for teil, _ in verlust(modell, r, l, schritte, regel_tensor(regel, len(r), geraet)):
+            modell.zero_grad()
+            teil.backward()
+            for n, p in modell.named_parameters():
+                if p.grad is not None:
+                    fisher[n] += p.grad.detach() ** 2
+            anzahl += 1
+    modell.zero_grad()
+    fisher = {n: f / anzahl for n, f in fisher.items()}
+
+    def strafe(m):
+        return staerke * sum((fisher[n] * (p - alt[n]) ** 2).sum() for n, p in m.named_parameters())
+    return strafe
+
+
 def trainieren(n=6, laeufe=3000, batch=128, schritte=8, d=64, innere=3, lernrate=1e-3,
                anzahl_training=40_000, anzahl_test=2_000, leer_max=None, seed=0, protokoll=print,
-               zwischenstand=None, geraet="cpu"):
-    """Trainiert ein neues Modell. Mit `leer_max` nur auf Rätseln mit höchstens so vielen Leerfeldern."""
+               zwischenstand=None, geraet="cpu", block="mixer"):
+    """Trainiert ein neues Modell. Mit `leer_max` nur auf Rätseln mit höchstens so vielen Leerfeldern.
+    `block`: "mixer" (Standard) oder "attention" für den Denkkern."""
     torch.manual_seed(seed)
     (tr_r, tr_l, _), (te_r, te_l, te_t) = daten_laden(n, anzahl_training, anzahl_test, seed, protokoll=protokoll)
     if leer_max is not None:
         auswahl = (tr_r == 0).sum(1) <= leer_max
         tr_r, tr_l = tr_r[auswahl], tr_l[auswahl]
         protokoll(f"Training nur auf Rätseln mit höchstens {leer_max} leeren Feldern: {len(tr_r)} Stück")
-    modell = DenkModell(n=n, d=d, innere=innere).to(geraet)
+    modell = DenkModell(n=n, d=d, innere=innere, block=block).to(geraet)
     protokoll(f"Modell: {modell.anzahl_parameter():,} Parameter · Batch {batch} · rechnet auf {geraet}".replace(",", "."))
 
     def pruefen(_lauf):
