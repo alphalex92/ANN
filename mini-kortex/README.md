@@ -41,6 +41,7 @@ möglich, würde aber die eigentliche Idee unter sehr viel Rechenarbeit begraben
 | **Gedächtnis** | [gedaechtnis.py](mini_kortex/gedaechtnis.py) | Hippocampus | Modernes Hopfield-Netz: speichert ein Erlebnis in einem Schritt, ruft über Ähnlichkeit ab |
 | **Konsolidierung** | [konsolidierung.py](mini_kortex/konsolidierung.py) | Schlaf, Hippocampus-Replay | Trainiert das Netz auf eigenen, geprüften Erlebnissen nach, vermischt mit alten Rätseln |
 | **Probieren** | [weltmodell.py](mini_kortex/weltmodell.py) | Vorstellungskraft | Trifft Annahmen und lässt das Netz die Folgen durchdenken |
+| **Auge** | [sehen.py](mini_kortex/sehen.py) | Sehrinde | Kleines CNN, liest handgeschriebene Ziffern (MNIST). Irrt sich manchmal |
 | **Steuerung** | [agent.py](mini_kortex/agent.py) | | Verbindet alles zum Ablauf. Jedes Modul lässt sich abschalten |
 
 ## Schnellstart
@@ -86,6 +87,11 @@ Modell zu. `beispiele` zeigt ein paar Rätsel, `pytest` startet die Tests.
 Findet PyTorch eine GPU, rechnet alles automatisch dort. `--geraet cpu` vor dem Befehl erzwingt die
 CPU, `--geraet cuda` die GPU. Beim Training legt `--batch` fest, wie viele Rätsel ein Lauf enthält
 (Standard 128). Auf der GPU lohnen sich meist größere Batches. Gespeicherte Modelle laden auf beiden.
+
+Für das visuelle Sudoku (`python -m mini_kortex sehen`) braucht es die vier MNIST-Dateien
+(`*-ubyte.gz`, zusammen 11 MB, zum Beispiel von https://storage.googleapis.com/cvdf-datasets/mnist/)
+in einem Ordner `mnist`. Einen anderen Ort nennt die Umgebungsvariable `MINI_KORTEX_MNIST`. Das Auge
+wird bei jedem Aufruf neu trainiert. `--epochen 1 4` vergleicht ein mäßiges mit einem guten Auge.
 
 Mit `--groesse 6` vor dem Befehl läuft alles auf 6×6, das Training dauert dann etwa eine halbe
 Stunde (zum Beispiel `python -m mini_kortex --groesse 6 trainieren`).
@@ -445,6 +451,62 @@ Gemeint ist dort ein eigenes Modul, das die Folgen von Handlungen in einer Welt 
 dem Vorhersagefehler lernt. Dafür ist die Gitterwelt vorgesehen. Hier zeigt sich nur, dass Planen
 durch Probehandeln im Kopf schon mit dem vorhandenen Netz viel bringt.
 
+## Ergebnisse: Visuelles Sudoku (das Auge irrt sich)
+
+Bisher bekam der Mini-Kortex das Rätsel fehlerfrei als Zahlen. Jetzt ist jede Vorgabe ein
+handgeschriebenes Bild aus dem MNIST-Testteil, und ein **Auge** (kleines CNN, 225.000 Parameter,
+trainiert in wenigen Sekunden) muss die Ziffer erst erkennen. Ein Rätsel hat im Schnitt 38
+Vorgaben. Liest das Auge 1 % der Ziffern falsch, ist schon jedes dritte Rätsel falsch gelesen.
+
+Verglichen werden drei Abläufe ([sehen.py](mini_kortex/sehen.py), Befehl `sehen`). Gelöst wird
+jeweils mit Probieren in Gedanken:
+
+- **Kette:** erst erkennen, dann lösen. Das Auge gibt nur seine beste Lesart weiter.
+- **Arbeitsraum:** Erkennen und Lösen tauschen sich aus.
+  1. Das Werkzeug meldet Vorgaben, die sich widersprechen. Drei Viertel aller Lesefehler fallen
+     so sofort auf.
+  2. Findet der Denkkern keine regelkonforme Lösung, ist vermutlich etwas falsch gelesen.
+  3. Dann schaut das System bei den verdächtigen Feldern nochmal hin. Verdächtig sind Felder im
+     Widerspruch und Felder, bei denen das Auge unter 99 % sicher war. Es liest sie so, wie das
+     Auge sie am zweitliebsten gelesen hätte, einzeln und paarweise.
+  4. Von allen Lesarten, die aufgehen, gewinnt die, die am besten zu den Bildern passt.
+- **Orakel:** das Rätsel als fehlerfreie Zahlen. Das ist die Obergrenze.
+
+Modell d128/16, 2000 Testrätsel, Mittel über drei Seeds des Auges (je andere Startwerte und
+andere Bilder):
+
+| Auge | Ablauf | richtig | falsch, aber geprüft | aufgegeben | richtig bei 1 Lesefehler | bei 2+ | Ø Schritte |
+|---|---|---:|---:|---:|---:|---:|---:|
+| | Orakel | 97,7 % | 0 % | 2,3 % | | | 13 |
+| 1 Epoche, 2,1 % Fehler | Kette | 45,0 % | 2,5 % | 52,5 % | 0 % | 0 % | 102 |
+| | **Arbeitsraum** | **84,0 %** | 7,2 % | 8,9 % | 88,3 % | 43,4 % | 219 |
+| 4 Epochen, 1,1 % Fehler | Kette | 65,9 % | 2,0 % | 32,1 % | 0,3 % | 0 % | 67 |
+| | **Arbeitsraum** | **92,8 %** | 4,5 % | 2,7 % | 88,2 % | 61,8 % | 124 |
+
+Mit d64/8 (Seed 0) ist es dasselbe Bild: Bei 1,1 % Fehler im Auge löst die Kette 62,7 % und der
+Arbeitsraum 88,8 %, bei einer Obergrenze von 93,7 %.
+
+Was man daraus lernt:
+
+- **Die starre Kette bricht an jedem Lesefehler.** Schon ein falsch gelesenes Feld macht das
+  Rätsel unlösbar oder zu einem anderen Rätsel. Mit einem guten Auge (99 % pro Ziffer) bleiben
+  zwei Drittel, mit einem mäßigen (98 %) weniger als die Hälfte.
+- **Der Austausch holt fast alles zurück.** Bei einem Lesefehler löst der Arbeitsraum 88 %, bei
+  einer Obergrenze von 98 %. Insgesamt kommt er mit dem guten Auge auf 92,8 % statt 65,9 %. Es
+  braucht keine neuen Gewichte, nur die Rückmeldung von Werkzeug und Denkkern an die Wahrnehmung.
+- **Die beiden Signale ergänzen sich.** Das Werkzeug findet Widersprüche zwischen Vorgaben. Der
+  Denkkern merkt, wenn ein Rätsel ohne Widerspruch trotzdem nicht aufgeht. Die Unsicherheit des
+  Auges sagt, wo man nachsehen sollte: Die richtige Ziffer ist in 84 % der Fälle seine zweite Wahl.
+- **Das Prüfsiegel gilt nur noch für das Gelesene.** Bisher hat der Regelprüfer nie eine falsche
+  Lösung bestätigt. Jetzt prüft er gegen das, was das Auge gesehen hat. Zwei Arten von Fehlern
+  bleiben:
+  - Ein falsch gelesenes Rätsel, das trotzdem aufgeht. Das sind 2 % in beiden Abläufen.
+  - Der Arbeitsraum erzeugt zusätzlich eigene Fehler. Scheitert der Denkkern an einem richtig
+    gelesenen Rätsel, deutet er eine Vorgabe um und löst dann ein leichteres, falsches Rätsel.
+  - Deshalb steigt „falsch, aber geprüft“ von 2,0 % auf 4,5 %.
+- **Der Preis ist Rechenzeit.** Der Arbeitsraum braucht im Schnitt 124 statt 67 Denkschritte, weil
+  er bei Problemen mehrere Lesarten durchdenkt. Bei richtig gelesenen Rätseln kostet er nichts.
+
 ## Ergebnisse 6×6
 
 Ein Modell mit 88.991 Parametern, 3000 Läufe (ca. 30 Minuten), 2000 Testrätsel mit 12–28 leeren
@@ -470,6 +532,9 @@ und offene Fragen stehen in [ARCHITEKTUR.md](ARCHITEKTUR.md).
   Trainingsset, weniger Replay pro Batch, oder wichtige Gewichte schützen (Elastic Weight Consolidation).
 - **Unfreundliche neue Regel**: eine Regel, die die alte kaum überschneidet. Wann scheitert das
   Selbstlernen, und hilft dann der Lehrer?
+- **Dem Auge misstrauen lernen**: Der Arbeitsraum bestätigt manchmal ein falsch gelesenes Rätsel.
+  Abhilfe könnte sein, aufzugeben, wenn eine Lösung sichere Vorgaben umdeuten muss. Oder das Auge
+  schaut verdächtige Felder wirklich nochmal an, etwa leicht verschoben.
 - **Probieren im Schlaf**: Lösungen, die nur mit Annahmen gefunden wurden, nachts üben. Wird aus dem
   Probieren Intuition, wie zuvor aus dem langen Nachdenken?
 - Noch tiefer üben (`--schritte 32`): Wächst der Gewinn bei den langen Schlussketten weiter?

@@ -1,4 +1,4 @@
-"""Kommandozeile: python -m mini_kortex [--groesse 6|9] trainieren | auswerten | konsolidieren | umlernen | probieren | loesen | beispiele"""
+"""Kommandozeile: python -m mini_kortex [--groesse 6|9] trainieren | auswerten | konsolidieren | umlernen | probieren | sehen | loesen | beispiele"""
 
 import argparse
 import json
@@ -249,6 +249,47 @@ def befehl_probieren(args):
         print(f"Ergebnisse als JSON in {args.json}")
 
 
+def befehl_sehen(args):
+    """Visuelles Sudoku: Kette (erst erkennen, dann lösen) gegen Arbeitsraum (Austausch) und Orakel."""
+    from .sehen import arbeitsraum, auge_genauigkeit, auge_trainieren, auswerten, bilder_sudoku, kette, lesefehler, sehen
+    from .weltmodell import probieren
+    n = args.groesse
+    if n != 9:
+        sys.exit("sehen gibt es nur für 9×9")
+    modell = laden(Path(args.modell), geraet=args.geraet) if args.modell else _modell(n, args.geraet)
+    _, (raetsel, loesung, _t) = daten_laden(n, 0, args.anzahl)
+    raetsel, loesung = raetsel[:args.anzahl], loesung[:args.anzahl]
+    loeser = dict(basis_schritte=MAX_SCHRITTE[n], tiefe=6, breite=2, schritte=16)
+    ergebnis = {}
+    for epochen in args.epochen:
+        auge = auge_trainieren(epochen, seed=args.seed, geraet=args.geraet, protokoll=lambda _s: None)
+        fehler = 1 - auge_genauigkeit(auge)
+        p = sehen(auge, bilder_sudoku(raetsel, np.random.default_rng(args.seed)))
+        lf = lesefehler(p.argmax(-1), raetsel)
+        gruppen = [("0", lf == 0), ("1", lf == 1), ("2+", lf >= 2)]
+        print(f"Auge nach {epochen} Epoche(n): {fehler:.2%} der Test-Ziffern falsch gelesen. "
+              f"Rätsel mit 0 / 1 / 2+ Lesefehlern: " + " / ".join(f"{m.mean():.1%}" for _, m in gruppen))
+        print(f"  {'':<14} {'richtig':>8} {'falsch, aber geprüft':>21} {'aufgegeben':>11}"
+              + "".join(f"{'richtig bei ' + g:>15}" for g, _ in gruppen) + f"{'Ø Schritte':>12}")
+        zeilen = {}
+        for name in ("orakel", "kette", "arbeitsraum"):
+            if name == "orakel":
+                e = probieren(modell, raetsel, **loeser)
+            else:
+                e = (kette if name == "kette" else arbeitsraum)(modell, p, **loeser)
+            w = auswerten(e, raetsel, loesung)
+            richtig = e["geloest"] & (e["antwort"] == loesung).all(1)
+            w.update({f"richtig_{g}": float(richtig[m].mean()) if m.any() else float("nan") for g, m in gruppen})
+            print(f"  {name:<14} {w['richtig']:>8.1%} {w['falsch_geprueft']:>21.1%} {w['aufgegeben']:>11.1%}"
+                  + "".join(f"{w['richtig_' + g]:>15.1%}" for g, _ in gruppen) + f"{w['schritte']:>12.1f}")
+            zeilen[name] = w
+        print()
+        ergebnis[str(epochen)] = {"fehler_auge": fehler, "lesefehler": np.bincount(lf).tolist(), "zeilen": zeilen}
+    if args.json:
+        Path(args.json).write_text(json.dumps(ergebnis, ensure_ascii=False, indent=1))
+        print(f"Ergebnisse als JSON in {args.json}")
+
+
 def befehl_loesen(args):
     """Zeigt Schritt für Schritt, wie das Modell ein Rätsel durchdenkt."""
     n = args.groesse
@@ -341,6 +382,15 @@ def main():
     w.add_argument("--modell", help="anderes Modell laden")
     w.add_argument("--json", help="Ergebnisse zusätzlich als JSON speichern")
     w.set_defaults(f=befehl_probieren)
+
+    v = sub.add_parser("sehen", help="Visuelles Sudoku: handgeschriebene Vorgaben (MNIST), Kette gegen Arbeitsraum")
+    v.add_argument("--epochen", type=int, nargs="+", default=[1, 4],
+                   help="Trainingsdauer des Auges; mehrere Werte = mehrere Augen vergleichen")
+    v.add_argument("--anzahl", type=int, default=2000)
+    v.add_argument("--seed", type=int, default=0, help="Startwerte des Auges und Auswahl der Bilder")
+    v.add_argument("--modell", help="anderes Modell laden")
+    v.add_argument("--json", help="Ergebnisse zusätzlich als JSON speichern")
+    v.set_defaults(f=befehl_sehen)
 
     l = sub.add_parser("loesen", help="Einem Rätsel beim Nachdenken zuschauen")
     l.add_argument("--leer", type=int, default=None, help="Zahl leerer Felder")

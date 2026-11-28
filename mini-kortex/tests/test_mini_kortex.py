@@ -286,3 +286,53 @@ def test_probieren_gibt_nur_gepruefte_loesungen_ab():
     assert np.all((e["antwort"] == loesungen).all(1)[e["geloest"]])  # gelöst heißt wirklich richtig
     assert np.all(e["antwort"][raetsel > 0] == raetsel[raetsel > 0])
     assert np.all((e["annahmen"] >= 0) == e["geloest"])
+
+
+def test_widersprueche_findet_doppelte_vorgaben():
+    from mini_kortex.sehen import widersprueche
+    raetsel, _, _ = datensatz(2, np.random.default_rng(31), n=9)
+    assert not widersprueche(raetsel).any()
+    kaputt = raetsel.copy()
+    zeile = kaputt[0, :9]
+    a, b = np.flatnonzero(zeile > 0)[:2]
+    kaputt[0, b] = kaputt[0, a]                     # zwei gleiche Ziffern in der ersten Zeile
+    w = widersprueche(kaputt)
+    assert w[0, a] and w[0, b] and not w[1].any()
+
+
+def test_arbeitsraum_korrigiert_einen_lesefehler(monkeypatch):
+    import mini_kortex.sehen as sehen
+    raetsel, loesungen, _ = datensatz(3, np.random.default_rng(32), n=9)
+
+    def loeser(_modell, r, **_):
+        # Ersatz-Löser: löst genau die Rätsel, deren Vorgaben zur echten Lösung passen.
+        r = np.asarray(r)
+        passend = np.array([[((x == 0) | (x == l)).all() for l in loesungen] for x in r])
+        geloest = passend.any(1)
+        antwort = np.where(geloest[:, None], loesungen[passend.argmax(1)], r)
+        return {"geloest": geloest, "antwort": antwort, "schritte": np.ones(len(r), np.int64),
+                "annahmen": np.where(geloest, 0, -1)}
+
+    monkeypatch.setattr(sehen, "probieren", loeser)
+    p = np.full((*raetsel.shape, 10), 1e-6)
+    p[np.arange(3)[:, None], np.arange(81)[None], raetsel] = 1.0
+    feld = np.flatnonzero(raetsel[0] > 0)[0]
+    falsch = raetsel[0, feld] % 9 + 1
+    p[0, feld, raetsel[0, feld]], p[0, feld, falsch] = 0.3, 0.7   # das Auge liest eine falsche Ziffer
+    p /= p.sum(-1, keepdims=True)
+    k = sehen.kette(None, p)
+    a = sehen.arbeitsraum(None, p)
+    assert not k["geloest"][0] and k["geloest"][1:].all()
+    assert a["geloest"].all() and (a["antwort"] == loesungen).all()
+
+
+@pytest.mark.skipif(not (__import__("mini_kortex.sehen").sehen.MNIST_ORDNER / "t10k-images-idx3-ubyte.gz").exists(),
+                    reason="MNIST nicht vorhanden")
+def test_bilder_sudoku_zeigt_vorgaben_und_leere_felder():
+    from mini_kortex.sehen import bilder_sudoku, mnist_laden
+    bilder, ziffern = mnist_laden(teil="test")
+    assert bilder.shape == (10000, 28, 28) and ziffern.max() == 9
+    raetsel, _, _ = datensatz(2, np.random.default_rng(33), n=9)
+    b = bilder_sudoku(raetsel, np.random.default_rng(0))
+    assert b.shape == (2, 81, 28, 28)
+    assert (b[raetsel == 0] == 0).all() and (b[raetsel > 0].reshape(-1, 784).max(1) > 0).all()
